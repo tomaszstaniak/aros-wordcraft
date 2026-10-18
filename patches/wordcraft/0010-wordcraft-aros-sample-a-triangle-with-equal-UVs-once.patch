@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 18:01:13 +0200
+Subject: [PATCH] wordcraft-aros: sample a triangle with equal UVs once
+
+Problem: run wp2 (pool v11-1, 3 runs at 1008x720) found the GUI rasterizer's
+  solid fills taking 81 % of its time: about 5000 triangles and 1.73 Mpx
+  covered per frame, every covered pixel sampling the font atlas bilinearly
+  (four texels in f32) only to read egui's white texel, ~590 ns per pixel
+  under TCG.
+Rationale: a triangle whose three UVs are equal samples the same point
+  everywhere; sample it once per triangle. With a flat vertex colour the
+  modulated source colour is the same everywhere too, and is computed once.
+  The per-pixel path is unchanged for every other triangle.
+Scope: raster.rs. The image is expected to be unchanged (checked by
+  comparing screenshots against the previous build). The WORDCRAFT_PERF
+  bilinear/nearest counters now count per-pixel samples only.
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wp3).
+Removal: none.
+---
+ apps/wordcraft-aros/src/raster.rs | 57 ++++++++++++++++++++-----------
+ 1 file changed, 37 insertions(+), 20 deletions(-)
+
+diff --git a/apps/wordcraft-aros/src/raster.rs b/apps/wordcraft-aros/src/raster.rs
+index e256319074556888054cda4efcbaccfb51c4edac..c8698887fd23c47ef79ff26fc63ff57522ffcd0a 100644
+--- a/apps/wordcraft-aros/src/raster.rs
++++ b/apps/wordcraft-aros/src/raster.rs
+@@ -261,6 +261,18 @@ fn triangle(
+     let cb = b.color.to_array();
+     let cc = c.color.to_array();
+     let flat_color = ca == cb && cb == cc;
++    // A triangle whose three UVs are equal samples one point of its texture at every pixel
++    // (egui's fills use the atlas's white texel): sample once. With a flat colour, the whole
++    // source colour is the same everywhere too. Same arithmetic as the per-pixel path.
++    let uniform = (a.uv == b.uv && b.uv == c.uv).then(|| texture.map(|t| t.sample(a.uv.x, a.uv.y)));
++    let modulate = |color: [f32; 4], s: [f32; 4]| [color[0] * s[0] / 255.0, color[1] * s[1] / 255.0, color[2] * s[2] / 255.0, color[3] * s[3] / 255.0];
++    let flat_src = match uniform {
++        Some(sample) if flat_color => {
++            let color = [ca[0] as f32, ca[1] as f32, ca[2] as f32, ca[3] as f32];
++            Some(sample.map_or(color, |s| modulate(color, s)))
++        }
++        _ => None,
++    };
+     // How each edge function changes per pixel step to the right (d/dx of the expressions below).
+     let e0_dx = by - cy;
+     let e1_dx = cy - ay;
+@@ -277,27 +289,32 @@ fn triangle(
+         for px in min_x..max_x {
+             if w0 * sign >= 0.0 && w1 * sign >= 0.0 && w2 * sign >= 0.0 {
+                 covered += 1;
+-                let l0 = w0 * inv_area;
+-                let l1 = w1 * inv_area;
+-                let l2 = w2 * inv_area;
+-                let color = if flat_color {
+-                    [ca[0] as f32, ca[1] as f32, ca[2] as f32, ca[3] as f32]
+-                } else {
+-                    let mut v = [0.0f32; 4];
+-                    for i in 0..4 {
+-                        v[i] = ca[i] as f32 * l0 + cb[i] as f32 * l1 + cc[i] as f32 * l2;
+-                    }
+-                    v
+-                };
+-                let src = match texture {
+-                    Some(t) => {
+-                        let u = a.uv.x * l0 + b.uv.x * l1 + c.uv.x * l2;
+-                        let v = a.uv.y * l0 + b.uv.y * l1 + c.uv.y * l2;
+-                        sampled += 1;
+-                        let s = t.sample(u, v);
+-                        [color[0] * s[0] / 255.0, color[1] * s[1] / 255.0, color[2] * s[2] / 255.0, color[3] * s[3] / 255.0]
++                let src = match flat_src {
++                    Some(src) => src,
++                    None => {
++                        let l0 = w0 * inv_area;
++                        let l1 = w1 * inv_area;
++                        let l2 = w2 * inv_area;
++                        let color = if flat_color {
++                            [ca[0] as f32, ca[1] as f32, ca[2] as f32, ca[3] as f32]
++                        } else {
++                            let mut v = [0.0f32; 4];
++                            for i in 0..4 {
++                                v[i] = ca[i] as f32 * l0 + cb[i] as f32 * l1 + cc[i] as f32 * l2;
++                            }
++                            v
++                        };
++                        match (uniform, texture) {
++                            (Some(Some(s)), _) => modulate(color, s),
++                            (_, Some(t)) => {
++                                let u = a.uv.x * l0 + b.uv.x * l1 + c.uv.x * l2;
++                                let v = a.uv.y * l0 + b.uv.y * l1 + c.uv.y * l2;
++                                sampled += 1;
++                                modulate(color, t.sample(u, v))
++                            }
++                            (_, None) => color,
++                        }
+                     }
+-                    None => color,
+                 };
+                 let alpha = src[3];
+                 if alpha > 0.0 {

@@ -1,0 +1,369 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 17:36:56 +0200
+Subject: [PATCH] wordcraft-aros: break the rasterizer and the repaint schedule
+ down in WORDCRAFT_PERF
+
+Problem: run wp1 showed the GUI rasterizer taking 94-99 % of every frame
+  and the loop never sleeping, but not which part of paint costs what, nor
+  what asks for the repaints.
+Rationale: with WORDCRAFT_PERF, paint counts per kind of triangle (user
+  texture such as the page image; solid fills, which sample the atlas's
+  white texel; atlas text) the triangles, visited and covered pixels,
+  bilinear and nearest samples, blended and opaque writes, and times runs of
+  consecutive same-kind triangles (two clock reads per run, none per pixel);
+  clear is timed alone. The loop records the timeout it slept with, whether
+  an event or the timeout woke it, how late the due repaint was, the delay
+  egui asked for next, and egui's repaint causes (file:line reason) per
+  segment, written to <file>.causes.csv.
+Scope: diagnostic; without WORDCRAFT_PERF the pixel loop keeps four local
+  counters and nothing else changes.
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wp2).
+Removal: with 0008.
+---
+ apps/wordcraft-aros/src/main.rs   |  10 ++-
+ apps/wordcraft-aros/src/perf.rs   |  44 +++++++++++--
+ apps/wordcraft-aros/src/raster.rs | 105 +++++++++++++++++++++++++++++-
+ 3 files changed, 151 insertions(+), 8 deletions(-)
+
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index 79e0028ba64ad268d7b6f48a1cb6bb72297bffd3..bfbdd1fb3a6260127ba175592deed0cf09adc430 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -296,6 +296,7 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+     let mut title = String::from("WordCraft");
+     let (sw, sh) = ffi::screen_size();
+     let mut perf = perf::Perf::from_env();
++    renderer.measure = perf.is_some();
+ 
+     loop {
+         let mut rec = perf::Frame::default();
+@@ -306,7 +307,9 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             Some(t) => t.saturating_duration_since(Instant::now()).min(IDLE_POLL),
+             None => IDLE_POLL,
+         };
+-        window.wait(timeout.as_millis() as i32);
++        rec.late_us = due.map_or(-1, |t| loop_start.saturating_duration_since(t).as_micros() as i64);
++        rec.wait_timeout_ms = timeout.as_millis() as i32;
++        rec.woke_by_event = window.wait(timeout.as_millis() as i32) as u8;
+         let woke = Instant::now();
+         rec.wait_us = perf::us(woke - loop_start);
+         let (mut oldest, mut newest) = (i64::MAX, i64::MIN);
+@@ -383,6 +386,9 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             app.ui(ui);
+         });
+         let ui_done = Instant::now();
++        if let Some(p) = perf.as_mut() {
++            p.causes(ctx.repaint_causes().iter().map(|c| format!("{}:{} {}", c.file, c.line, c.reason)));
++        }
+         rec.logic_us = perf::us(logic_done - input_done);
+         rec.ui_us = perf::us(ui_done - logic_done);
+         let (renders_after, render_ns_after) = wordcraft_render::perf::totals();
+@@ -431,6 +437,7 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             }
+             // The next repaint: at once, after a delay, or when input arrives.
+             let delay = vo.repaint_delay;
++            rec.next_delay_ms = if delay < Duration::from_secs(3600) { delay.as_millis() as i64 } else { -1 };
+             if delay < Duration::from_secs(3600) {
+                 let due = Instant::now() + delay;
+                 let mut slot = repaint.due.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+@@ -460,6 +467,7 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             rec.blit_us = perf::us(blitted - rasterized);
+             (rec.latency_min_us, rec.latency_max_us) = if rec.events > 0 { (shown - newest, shown - oldest) } else { (-1, -1) };
+             rec.texture_px = out.textures_delta.set.iter().flat_map(|(_, ds)| ds.iter()).map(|d| (d.image.width() * d.image.height()) as u64).sum();
++            rec.paint = renderer.stats;
+             rec.vertices = primitives
+                 .iter()
+                 .map(|p| match &p.primitive {
+diff --git a/apps/wordcraft-aros/src/perf.rs b/apps/wordcraft-aros/src/perf.rs
+index 798e45d0f7a8e1381d30d9e7a6c242fb522eefb3..bdc9087a8991306c77d59ec8da324a88bb1bd187 100644
+--- a/apps/wordcraft-aros/src/perf.rs
++++ b/apps/wordcraft-aros/src/perf.rs
+@@ -7,8 +7,11 @@
+ //! the blit of the frame that handled it, both in the system time of `ffi::systime_us`. F9 is
+ //! taken by the shell as a scenario marker and not passed on; each press starts the next segment.
+ 
++use std::collections::BTreeMap;
+ use std::io::Write;
+ 
++use crate::raster::PaintStats;
++
+ #[derive(Clone, Copy, Default)]
+ pub struct Frame {
+     pub segment: u32,
+@@ -37,12 +40,23 @@ pub struct Frame {
+     pub vertices: u32,
+     pub width: u16,
+     pub height: u16,
++    /// The timeout the loop slept with (ms; 1 when a repaint was already due) and whether a
++    /// window message or a wake-up ended the sleep (1) rather than the timeout (0).
++    pub wait_timeout_ms: i32,
++    pub woke_by_event: u8,
++    /// How far past its due time the repaint was when the loop started this pass; -1: none due.
++    pub late_us: i64,
++    /// The delay egui asked for before the next pass, at the end of this one (ms); -1: none.
++    pub next_delay_ms: i64,
++    pub paint: PaintStats,
+ }
+ 
+ pub struct Perf {
+     path: std::path::PathBuf,
+     frames: Vec<Frame>,
+     pub segment: u32,
++    /// (segment, "file:line reason") -> frames run for that cause.
++    causes: BTreeMap<(u32, String), u32>,
+ }
+ 
+ /// Records beyond this are dropped (about an hour at a few frames a second).
+@@ -51,7 +65,7 @@ const MAX_FRAMES: usize = 50_000;
+ impl Perf {
+     pub fn from_env() -> Option<Perf> {
+         let path = std::env::var_os("WORDCRAFT_PERF").filter(|p| !p.is_empty())?;
+-        Some(Perf { path: path.into(), frames: Vec::with_capacity(MAX_FRAMES), segment: 0 })
++        Some(Perf { path: path.into(), frames: Vec::with_capacity(MAX_FRAMES), segment: 0, causes: BTreeMap::new() })
+     }
+ 
+     pub fn push(&mut self, frame: Frame) {
+@@ -60,23 +74,45 @@ impl Perf {
+         }
+     }
+ 
++    /// Counts the reasons egui recorded for this pass's repaint.
++    pub fn causes(&mut self, causes: impl IntoIterator<Item = String>) {
++        for c in causes {
++            *self.causes.entry((self.segment, c)).or_default() += 1;
++        }
++    }
++
+     pub fn write(&self) {
+         let result = (|| -> std::io::Result<()> {
+             let mut f = std::io::BufWriter::new(std::fs::File::create(&self.path)?);
+             writeln!(
+                 f,
+-                "segment,at_us,wait_us,input_us,logic_us,ui_us,tess_us,textures_us,raster_us,blit_us,events,moves,keys,wheels,buttons,latency_min_us,latency_max_us,page_renders,page_render_us,texture_px,vertices,width,height"
++                "segment,at_us,wait_us,input_us,logic_us,ui_us,tess_us,textures_us,raster_us,blit_us,events,moves,keys,wheels,buttons,latency_min_us,latency_max_us,page_renders,page_render_us,texture_px,vertices,width,height,wait_timeout_ms,woke_by_event,late_us,next_delay_ms,clear_us,runs{}",
++                ["page", "solid", "atlas"]
++                    .iter()
++                    .flat_map(|k| ["triangles", "visited", "covered", "bilinear", "nearest", "blended", "opaque", "us"].map(move |f| format!(",{k}_{f}")))
++                    .collect::<String>()
+             )?;
+             for r in &self.frames {
+-                writeln!(
++                write!(
+                     f,
+                     "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                     r.segment, r.at_us, r.wait_us, r.input_us, r.logic_us, r.ui_us, r.tess_us, r.textures_us, r.raster_us, r.blit_us,
+                     r.events, r.moves, r.keys, r.wheels, r.buttons, r.latency_min_us, r.latency_max_us, r.page_renders,
+                     r.page_render_us, r.texture_px, r.vertices, r.width, r.height
+                 )?;
++                write!(f, ",{},{},{},{},{},{}", r.wait_timeout_ms, r.woke_by_event, r.late_us, r.next_delay_ms, r.paint.clear_us, r.paint.runs)?;
++                for k in &r.paint.kinds {
++                    write!(f, ",{},{},{},{},{},{},{},{}", k.triangles, k.visited, k.covered, k.bilinear, k.nearest, k.blended, k.opaque, k.us)?;
++                }
++                writeln!(f)?;
++            }
++            f.flush()?;
++            let mut c = std::io::BufWriter::new(std::fs::File::create(self.path.with_extension("causes.csv"))?);
++            writeln!(c, "segment,frames,cause")?;
++            for ((segment, cause), n) in &self.causes {
++                writeln!(c, "{segment},{n},\"{}\"", cause.replace('"', "'"))?;
+             }
+-            f.flush()
++            c.flush()
+         })();
+         if let Err(e) = result {
+             log::warn!("cannot write {}: {e}", self.path.display());
+diff --git a/apps/wordcraft-aros/src/raster.rs b/apps/wordcraft-aros/src/raster.rs
+index 7c78e6da243c444df06dcf136a5282f33619e56d..e256319074556888054cda4efcbaccfb51c4edac 100644
+--- a/apps/wordcraft-aros/src/raster.rs
++++ b/apps/wordcraft-aros/src/raster.rs
+@@ -51,8 +51,44 @@ impl Texture {
+     }
+ }
+ 
++/// What `paint` did, by kind of triangle (see [`Kind`]), for the WORDCRAFT_PERF measurement.
++#[derive(Clone, Copy, Default)]
++pub struct KindStats {
++    pub triangles: u32,
++    /// Pixels of the triangles' clipped bounding boxes: every one is tested.
++    pub visited: u64,
++    /// Pixels inside a triangle.
++    pub covered: u64,
++    pub bilinear: u64,
++    pub nearest: u64,
++    /// Covered pixels written as a blend (alpha below 255) and as an opaque copy.
++    pub blended: u64,
++    pub opaque: u64,
++    /// Time in runs of consecutive triangles of this kind (two clock reads per run).
++    pub us: u64,
++}
++
++/// Triangles by what they draw: a user texture (page images, previews), a solid colour (egui's
++/// fills sample the font atlas's white texel: all three UVs equal), or the atlas itself (text).
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum Kind {
++    Page = 0,
++    Solid = 1,
++    Atlas = 2,
++}
++
++#[derive(Clone, Copy, Default)]
++pub struct PaintStats {
++    pub kinds: [KindStats; 3],
++    pub clear_us: u64,
++    pub runs: u32,
++}
++
+ pub struct Renderer {
+     textures: HashMap<TextureId, Texture>,
++    /// Counters of the last `clear` + `paint`; filled only when `measure` is set.
++    pub stats: PaintStats,
++    pub measure: bool,
+     /// RGBA, `width * height * 4` bytes, opaque after `clear`.
+     pub frame: Vec<u8>,
+     pub width: usize,
+@@ -61,7 +97,7 @@ pub struct Renderer {
+ 
+ impl Renderer {
+     pub fn new(width: usize, height: usize) -> Self {
+-        let mut r = Self { textures: HashMap::new(), frame: Vec::new(), width: 0, height: 0 };
++        let mut r = Self { textures: HashMap::new(), stats: PaintStats::default(), measure: false, frame: Vec::new(), width: 0, height: 0 };
+         r.resize(width, height);
+         r
+     }
+@@ -80,9 +116,14 @@ impl Renderer {
+     }
+ 
+     pub fn clear(&mut self, rgb: [u8; 3]) {
++        let started = self.measure.then(std::time::Instant::now);
+         for px in self.frame.chunks_exact_mut(4) {
+             px.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+         }
++        self.stats = PaintStats::default();
++        if let Some(t) = started {
++            self.stats.clear_us = t.elapsed().as_micros() as u64;
++        }
+     }
+ 
+     /// Applies the frame's texture uploads (before painting).
+@@ -142,13 +183,40 @@ impl Renderer {
+                 continue;
+             }
+             let texture = self.textures.get(&mesh.texture_id);
++            let user_texture = matches!(mesh.texture_id, TextureId::User(_));
++            let measure = self.measure;
++            // The current run of same-kind triangles and when it started.
++            let mut run: Option<(Kind, std::time::Instant)> = None;
+             for tri in mesh.indices.chunks_exact(3) {
+                 let (Some(a), Some(b), Some(c)) =
+                     (mesh.vertices.get(tri[0] as usize), mesh.vertices.get(tri[1] as usize), mesh.vertices.get(tri[2] as usize))
+                 else {
+                     continue;
+                 };
+-                triangle(&mut self.frame, self.width, [x0, y0, x1, y1], pixels_per_point, texture, a, b, c);
++                let stats = if measure {
++                    let kind = if user_texture || mesh.texture_id != TextureId::Managed(0) {
++                        Kind::Page
++                    } else if a.uv == b.uv && b.uv == c.uv {
++                        Kind::Solid
++                    } else {
++                        Kind::Atlas
++                    };
++                    if run.is_none_or(|(k, _)| k != kind) {
++                        let now = std::time::Instant::now();
++                        if let Some((k, t)) = run {
++                            self.stats.kinds[k as usize].us += (now - t).as_micros() as u64;
++                        }
++                        self.stats.runs += 1;
++                        run = Some((kind, now));
++                    }
++                    Some(&mut self.stats.kinds[kind as usize])
++                } else {
++                    None
++                };
++                triangle(&mut self.frame, self.width, [x0, y0, x1, y1], pixels_per_point, texture, a, b, c, stats);
++            }
++            if let Some((k, t)) = run {
++                self.stats.kinds[k as usize].us += t.elapsed().as_micros() as u64;
+             }
+         }
+     }
+@@ -156,7 +224,17 @@ impl Renderer {
+ 
+ /// Rasterizes one triangle into `frame` within the clip box (pixel units, max exclusive).
+ #[allow(clippy::too_many_arguments)]
+-fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: Option<&Texture>, a: &Vertex, b: &Vertex, c: &Vertex) {
++fn triangle(
++    frame: &mut [u8],
++    width: usize,
++    clip: [i32; 4],
++    ppp: f32,
++    texture: Option<&Texture>,
++    a: &Vertex,
++    b: &Vertex,
++    c: &Vertex,
++    mut stats: Option<&mut KindStats>,
++) {
+     let (ax, ay) = (a.pos.x * ppp, a.pos.y * ppp);
+     let (bx, by) = (b.pos.x * ppp, b.pos.y * ppp);
+     let (cx, cy) = (c.pos.x * ppp, c.pos.y * ppp);
+@@ -172,6 +250,13 @@ fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: O
+     if min_x >= max_x || min_y >= max_y {
+         return;
+     }
++    if let Some(st) = stats.as_deref_mut() {
++        st.triangles += 1;
++        st.visited += ((max_x - min_x) as u64) * ((max_y - min_y) as u64);
++    }
++    // Counted per triangle, added once at the end: no counter work in the pixel loop beyond
++    // a few local increments.
++    let (mut covered, mut sampled, mut blended, mut opaque) = (0u64, 0u64, 0u64, 0u64);
+     let ca = a.color.to_array();
+     let cb = b.color.to_array();
+     let cc = c.color.to_array();
+@@ -191,6 +276,7 @@ fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: O
+         let row = py as usize * width;
+         for px in min_x..max_x {
+             if w0 * sign >= 0.0 && w1 * sign >= 0.0 && w2 * sign >= 0.0 {
++                covered += 1;
+                 let l0 = w0 * inv_area;
+                 let l1 = w1 * inv_area;
+                 let l2 = w2 * inv_area;
+@@ -207,6 +293,7 @@ fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: O
+                     Some(t) => {
+                         let u = a.uv.x * l0 + b.uv.x * l1 + c.uv.x * l2;
+                         let v = a.uv.y * l0 + b.uv.y * l1 + c.uv.y * l2;
++                        sampled += 1;
+                         let s = t.sample(u, v);
+                         [color[0] * s[0] / 255.0, color[1] * s[1] / 255.0, color[2] * s[2] / 255.0, color[3] * s[3] / 255.0]
+                     }
+@@ -217,11 +304,13 @@ fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: O
+                     let i = (row + px as usize) * 4;
+                     if let Some(dst) = frame.get_mut(i..i + 4) {
+                         if alpha >= 254.5 {
++                            opaque += 1;
+                             dst[0] = src[0] as u8;
+                             dst[1] = src[1] as u8;
+                             dst[2] = src[2] as u8;
+                             dst[3] = 255;
+                         } else {
++                            blended += 1;
+                             let keep = (255.0 - alpha) / 255.0;
+                             dst[0] = (src[0] + dst[0] as f32 * keep).min(255.0) as u8;
+                             dst[1] = (src[1] + dst[1] as f32 * keep).min(255.0) as u8;
+@@ -236,4 +325,14 @@ fn triangle(frame: &mut [u8], width: usize, clip: [i32; 4], ppp: f32, texture: O
+             w2 += e2_dx;
+         }
+     }
++    if let Some(st) = stats {
++        st.covered += covered;
++        if texture.is_some_and(|t| t.linear) {
++            st.bilinear += sampled;
++        } else {
++            st.nearest += sampled;
++        }
++        st.blended += blended;
++        st.opaque += opaque;
++    }
+ }

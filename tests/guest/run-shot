@@ -1,0 +1,15 @@
+; WordCraft GUI screenshot run RUN. Results: RESULTS:RUN-*
+FailAt 21
+Protect RAM:wc/WordCraft +e
+Protect RAM:wc/wordcraft-cli +e
+Stack 4000000
+SetEnv RUST_LOG debug
+SetEnv WORDCRAFT_LOG RAM:wc/log-s.txt
+Echo "RUN start" >RESULTS:RUN-start.txt
+Date >RESULTS:RUN-date1.txt
+RAM:wc/WordCraft --screenshot RAM:wc/shot1.png --screenshot-frames 8 RAM:wc/hello.docx
+Echo $RC >RESULTS:RUN-shot.rc
+Date >RESULTS:RUN-date2.txt
+Copy RAM:wc/shot1.png RESULTS:RUN-shot1.png
+Copy RAM:wc/log-s.txt RESULTS:RUN-log-s.txt
+Echo "RUN shot done" >RESULTS:RUN-shot-done.txt

@@ -1,0 +1,12 @@
+0001-Lock-libc-0.2.189-for-the-AROS-libc-replacement.patch
+0002-Add-getrandom-s-custom-backend-for-AROS-wordcraft-ar.patch
+0003-wordcraft-cli-own-stack-and-an-ending-rayon-pool-on-.patch
+0004-Render-vello_cpu-settings-without-its-CPU-counting-d.patch
+0005-Add-wordcraft-aros-the-editor-in-an-Intuition-window.patch
+0006-wordcraft-aros-no-desktop-theme-watcher.patch
+0007-wordcraft-aros-no-typed-text-for-keys-that-map-to-CS.patch
+0008-wordcraft-aros-measure-the-event-loop-WORDCRAFT_PERF.patch
+0009-wordcraft-aros-break-the-rasterizer-and-the-repaint-.patch
+0010-wordcraft-aros-sample-a-triangle-with-equal-UVs-once.patch
+0011-wordcraft-aros-test-only-the-part-of-a-row-a-triangl.patch
+0012-wordcraft-aros-wake-the-event-loop-only-for-other-th.patch

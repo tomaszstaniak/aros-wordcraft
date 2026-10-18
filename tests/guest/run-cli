@@ -1,0 +1,29 @@
+; WordCraft CLI smoke, run RUN. Results: RESULTS:RUN-*
+FailAt 21
+Protect RAM:wc/wordcraft-cli +e
+List RAM:wc >RESULTS:RUN-list.txt
+Echo "RUN start" >RESULTS:RUN-start.txt
+RAM:wc/wordcraft-cli --version >RESULTS:RUN-version.txt
+Echo $RC >RESULTS:RUN-version.rc
+RAM:wc/wordcraft-cli info RAM:wc/hello.docx >RESULTS:RUN-info.txt
+Echo $RC >RESULTS:RUN-info.rc
+RAM:wc/wordcraft-cli text RAM:wc/hello.docx >RESULTS:RUN-text.txt
+Echo $RC >RESULTS:RUN-text.rc
+RAM:wc/wordcraft-cli convert RAM:wc/hello.docx RAM:wc/out.odt >RESULTS:RUN-odt.txt
+Echo $RC >RESULTS:RUN-odt.rc
+RAM:wc/wordcraft-cli convert RAM:wc/hello.docx RAM:wc/out.pdf >RESULTS:RUN-pdf.txt
+Echo $RC >RESULTS:RUN-pdf.rc
+RAM:wc/wordcraft-cli render RAM:wc/hello.docx RAM:wc/p1.png --scale 1 >RESULTS:RUN-render.txt
+Echo $RC >RESULTS:RUN-render.rc
+RAM:wc/wordcraft-cli run --file RAM:wc/hello.docx --cmd "caret.docEnd={}" --cmd "text.newParagraph={}" --cmd "text.insert={*"text*":*"Written on AROS.*"}" --save RAM:wc/edited.docx >RESULTS:RUN-run.txt
+Echo $RC >RESULTS:RUN-run.rc
+RAM:wc/wordcraft-cli text RAM:wc/edited.docx >RESULTS:RUN-text2.txt
+Echo $RC >RESULTS:RUN-text2.rc
+RAM:wc/wordcraft-cli mcp <RAM:wc/mcp-in.txt >RESULTS:RUN-mcp.txt
+Echo $RC >RESULTS:RUN-mcp.rc
+Copy RAM:wc/out.odt RESULTS:RUN-out.odt
+Copy RAM:wc/out.pdf RESULTS:RUN-out.pdf
+Copy RAM:wc/p1.png RESULTS:RUN-p1.png
+Copy RAM:wc/edited.docx RESULTS:RUN-edited.docx
+List RAM:wc >RESULTS:RUN-list2.txt
+Echo "RUN done" >RESULTS:RUN-done.txt

@@ -1,0 +1,16 @@
+.KEY NAME/A
+.BRA {
+.KET }
+; Screenshots of the sample document from RAM:wc/WordCraft-base and
+; RAM:wc/WordCraft at both sizes, for an image comparison of two builds.
+; Results: RESULTS:{NAME}-{base,new}-{a,b}.png
+FailAt 21
+Stack 4000000
+SetEnv WORDCRAFT_NO_PREFS 1
+SetEnv WORDCRAFT_PERF ""
+RAM:wc/WordCraft-base --window 1008x720 --sample --screenshot RAM:wc/{NAME}-base-a.png --screenshot-frames 6
+RAM:wc/WordCraft --window 1008x720 --sample --screenshot RAM:wc/{NAME}-new-a.png --screenshot-frames 6
+RAM:wc/WordCraft-base --window 640x480 --sample --screenshot RAM:wc/{NAME}-base-b.png --screenshot-frames 6
+RAM:wc/WordCraft --window 640x480 --sample --screenshot RAM:wc/{NAME}-new-b.png --screenshot-frames 6
+Copy RAM:wc/{NAME}-#?.png RESULTS:
+Echo done >RESULTS:{NAME}-shots-done.txt

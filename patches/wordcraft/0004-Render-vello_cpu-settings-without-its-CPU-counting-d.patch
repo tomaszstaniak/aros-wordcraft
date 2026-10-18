@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 15:45:32 +0200
+Subject: [PATCH] Render: vello_cpu settings without its CPU-counting default
+
+Problem: wordcraft-cli render (file.exportPng) panicked on x86_64 ABIv11:
+  "getting the number of hardware threads is not supported on the target
+  platform" at vello_cpu 0.2.0 render.rs:197. The RenderSettings literals
+  set num_threads but fill the rest with ..Default::default(), and that
+  default evaluates available_parallelism().unwrap() before the field is
+  replaced. AROS's std cannot count CPUs.
+Rationale: render_settings(n) builds the settings from the detected SIMD
+  level and the given worker count, the same values as before on every
+  target. On AROS default_threads() is 0 (render on the calling thread):
+  its exec runs one CPU.
+Scope: wordcraft-render; output unchanged on other targets.
+Upstream-status: candidate (the ..Default::default() trap is not
+  AROS-specific; any target without available_parallelism hits it).
+Verification: see the port's evidence reports.
+Removal: when vello_cpu's default no longer unwraps, or AROS std answers
+  available_parallelism.
+---
+ crates/render/src/icon_lib.rs |  2 +-
+ crates/render/src/lib.rs      | 20 ++++++++++++++------
+ 2 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/crates/render/src/icon_lib.rs b/crates/render/src/icon_lib.rs
+index 07a0e405bd2572b550c4eb4812b7154fd61adc4b..9380622741f1c4349423cb692da8d4c5c0cf7f10 100644
+--- a/crates/render/src/icon_lib.rs
++++ b/crates/render/src/icon_lib.rs
+@@ -633,7 +633,7 @@ fn flatten(d: &str) -> Result<Vec<(Vec<[f32; 2]>, bool)>, String> {
+ /// Rasterise `icon` into a transparent `px`×`px` image in `ink` (premultiplied RGBA).
+ pub fn render(icon: &Icon, px: u32, ink: Rgb) -> Rendered {
+     let side = px.clamp(8, 4096) as u16;
+-    let mut ctx = RenderContext::new_with(side, side, vello_cpu::RenderSettings { num_threads: crate::default_threads(), ..Default::default() });
++    let mut ctx = RenderContext::new_with(side, side, crate::render_settings(crate::default_threads()));
+     ctx.set_transform(Affine::scale(side as f64 / GRID as f64));
+     ctx.set_paint(crate::color(ink, 1.0));
+     ctx.set_stroke(kurbo::Stroke::new(STROKE as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
+diff --git a/crates/render/src/lib.rs b/crates/render/src/lib.rs
+index b17601799c8c91341e51051c38afb8736f452d6c..78cc1e0ca2de9dfd3d795de783594b05955e966d 100644
+--- a/crates/render/src/lib.rs
++++ b/crates/render/src/lib.rs
+@@ -18,18 +18,26 @@ use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
+ 
+ pub mod icon_lib;
+ 
+-/// Worker threads for rasterising (0 on the web, where there are no threads).
++/// Worker threads for rasterising (0 on the web, where there are no threads, and on AROS, whose
++/// exec runs one CPU and whose std cannot count them).
+ pub fn default_threads() -> u16 {
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+     {
+         0
+     }
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     {
+         std::thread::available_parallelism().map(|n| (n.get().saturating_sub(1)).clamp(1, 8) as u16).unwrap_or(2)
+     }
+ }
+ 
++/// vello_cpu's settings with `num_threads` workers. Not `..Default::default()`: vello_cpu's
++/// default counts the CPUs with `available_parallelism().unwrap()`, which panics where std cannot
++/// count them (AROS), even when the count is then replaced.
++pub fn render_settings(num_threads: u16) -> vello_cpu::RenderSettings {
++    vello_cpu::RenderSettings { level: vello_cpu::Level::try_detect().unwrap_or(vello_cpu::Level::baseline()), num_threads }
++}
++
+ /// Largest raster side vello_cpu handles comfortably.
+ pub const MAX_SIDE: u32 = 16_000;
+ 
+@@ -409,7 +417,7 @@ pub fn render_page(doc: &Document, page: &Page, scale: f32, opts: &RenderOptions
+ /// Render a page into a `w`×`h` raster with `view` (page points → pixels).
+ pub fn render_region(doc: &Document, page: &Page, w: u32, h: u32, view: Affine, opts: &RenderOptions) -> Rendered {
+     let (w16, h16) = (w.clamp(1, MAX_SIDE) as u16, h.clamp(1, MAX_SIDE) as u16);
+-    let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: default_threads(), ..Default::default() });
++    let mut ctx = RenderContext::new_with(w16, h16, render_settings(default_threads()));
+     ctx.set_transform(Affine::IDENTITY);
+     ctx.set_paint(color(opts.ink(doc.settings.page_color.unwrap_or(opts.paper)), 1.0));
+     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
+@@ -490,7 +498,7 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
+     let (size, w, h, margin) = (fin(size, 12.0).min(1000.0) as f64, fin(w, 1.0), fin(h, 1.0), fin(margin, 0.0).min(1000.0) as f64);
+     let scale = if scale.is_finite() && scale > 0.0 { scale.min(16.0) } else { 1.0 };
+     let (w16, h16) = (((w * scale).ceil() as u32).clamp(1, MAX_SIDE) as u16, ((h * scale).ceil() as u32).clamp(1, MAX_SIDE) as u16);
+-    let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
++    let mut ctx = RenderContext::new_with(w16, h16, render_settings(0));
+     ctx.set_transform(Affine::IDENTITY);
+     ctx.set_paint(color(Rgb(255, 255, 255), 1.0));
+     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
+@@ -998,7 +1006,7 @@ pub fn render_items(doc: &Document, items: &[Draw], x: f32, y: f32, w: f32, h: f
+     let w16 = ((w * scale).ceil() as u32).clamp(1, MAX_SIDE) as u16;
+     let h16 = ((h * scale).ceil() as u32).clamp(1, MAX_SIDE) as u16;
+     let view = Affine::scale(scale as f64) * Affine::translate((-x as f64, -y as f64));
+-    let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
++    let mut ctx = RenderContext::new_with(w16, h16, render_settings(0));
+     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
+     for it in items {
+         draw(&mut ctx, doc, it, view, &visible, opts);

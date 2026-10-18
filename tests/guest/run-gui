@@ -1,0 +1,14 @@
+; WordCraft GUI interactive session RUN
+FailAt 21
+Protect RAM:wc/WordCraft +e
+MakeDir "RAM:wc out"
+Stack 4000000
+SetEnv RUST_LOG info
+SetEnv WORDCRAFT_LOG RAM:wc/log-g.txt
+Echo "RUN start" >RESULTS:RUN-start.txt
+RAM:wc/WordCraft RAM:wc/hello.docx
+Echo $RC >RESULTS:RUN-gui.rc
+Copy RAM:wc/log-g.txt RESULTS:RUN-log-g.txt
+List "RAM:wc out" >RESULTS:RUN-out-list.txt
+Copy RAM:wc/hello.docx RESULTS:RUN-hello.docx
+Echo "RUN gui done" >RESULTS:RUN-gui-done.txt

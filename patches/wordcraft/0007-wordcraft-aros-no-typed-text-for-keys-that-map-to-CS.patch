@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 16:08:18 +0200
+Subject: [PATCH] wordcraft-aros: no typed text for keys that map to CSI
+ sequences
+
+Problem: on x86_64 ABIv11 (pool v11-2, run wc4) End typed "45~" and
+  Shift+Home "44~" into the document. MapRawKey gives those keys a CSI
+  sequence (0x9B 44 ~); the text filter dropped only the control
+  character, the CSI, and sent the rest as typed text.
+Rationale: a key whose mapping starts with CSI has no character; its
+  egui Key event (Home, End, arrows, F-keys) is all it produces.
+Scope: wordcraft-aros input only. The PhotoCraft AROS shell this input
+  code comes from has the same filter.
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wc5).
+Removal: none.
+---
+ apps/wordcraft-aros/src/input.rs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/apps/wordcraft-aros/src/input.rs b/apps/wordcraft-aros/src/input.rs
+index 40bac19cbb798a727210c505f55aafebad5655e0..b4e35f7f1d012497dc41c022a2fc38bf2db185d1 100644
+--- a/apps/wordcraft-aros/src/input.rs
++++ b/apps/wordcraft-aros/src/input.rs
+@@ -106,7 +106,10 @@ impl Input {
+         if let Some(key) = key {
+             self.events.push(Event::Key { key, physical_key: None, pressed, repeat, modifiers: mods });
+         }
+-        if pressed && !mods.ctrl && !mods.command {
++        // Keys without a character (Home, End, the cursor and function keys) map to a CSI
++        // sequence: "\u{9b}44~" for Home. Only the CSI itself is a control character, so
++        // filtering would leave "44~" to be typed into the document.
++        if pressed && !mods.ctrl && !mods.command && !ev.text().starts_with('\u{9b}') {
+             let text: String = ev.text().chars().filter(|c| !c.is_control()).collect();
+             if !text.is_empty() {
+                 self.events.push(Event::Text(text));

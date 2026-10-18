@@ -1,0 +1,10 @@
+{
+  "repositories": {
+    "wordcraft": {
+      "url": "https://github.com/storytold/wordcraft.git",
+      "commit": "fc41918814f62645b6746ed68e71e8c2c2e85d6f",
+      "license": "MIT OR Apache-2.0",
+      "role": "build source (tag v0.7.0); patches/wordcraft/series applies to it"
+    }
+  }
+}

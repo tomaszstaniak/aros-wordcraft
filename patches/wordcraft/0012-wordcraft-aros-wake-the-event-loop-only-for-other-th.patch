@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 19:43:19 +0200
+Subject: [PATCH] wordcraft-aros: wake the event loop only for other threads'
+ repaint requests
+
+Problem: in run wp3 (pool v11-1) the loop never slept while idle, also at
+  640x480 where frames took 193 ms and the loop computed a timeout of about
+  71 ms in 127 of 209 idle frames: every wait ended at once with the wake
+  signal set and no window event. egui calls the repaint callback for every
+  request, including the caret's request_repaint_after for its next blink
+  made on the UI thread during the frame, and the callback raised the wake
+  signal each time, so the next wait returned immediately.
+Rationale: requests on the UI thread are recorded in the due time the loop
+  reads before it sleeps; only requests from other threads (background
+  work) need to wake it.
+Scope: wordcraft-aros main.rs. The PhotoCraft AROS shell this loop comes
+  from does the same.
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wp6).
+Removal: none.
+---
+ apps/wordcraft-aros/src/main.rs | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index bfbdd1fb3a6260127ba175592deed0cf09adc430..8b02301c6b87c4e777263f215247bac708a4dfad 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -275,12 +275,19 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+     let repaint = Arc::new(Repaint { waker: window.waker(), due: Mutex::new(Some(Instant::now())) });
+     {
+         let repaint = repaint.clone();
++        let ui_thread = std::thread::current().id();
+         ctx.set_request_repaint_callback(move |info| {
+             let due = Instant::now() + info.delay;
+             let mut slot = repaint.due.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+             *slot = Some(slot.map_or(due, |d| d.min(due)));
+             drop(slot);
+-            repaint.waker.wake();
++            // Only another thread has to wake the loop. A request made on the UI thread comes
++            // during a frame (the caret's next blink, a tooltip's delay), and the loop reads
++            // `due` before it sleeps; waking it as well ended every sleep at once, so a
++            // requested delay never happened.
++            if std::thread::current().id() != ui_thread {
++                repaint.waker.wake();
++            }
+         });
+     }
+     let mut app = new_app(shared_window, &options);

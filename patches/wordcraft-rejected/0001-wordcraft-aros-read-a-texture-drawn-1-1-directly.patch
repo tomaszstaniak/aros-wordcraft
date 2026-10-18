@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 18:31:22 +0200
+Subject: [PATCH] wordcraft-aros: read a texture drawn 1:1 directly
+
+Problem: after the solid-fill change (run wp3, pool v11-1), the page image
+  was 54 % of the rasterizer's time at 1008x720: about 408 kpx covered per
+  frame, each sampled bilinearly (four texels in f32), ~570 ns per pixel.
+Rationale: the page image is rendered at the screen's scale and placed on
+  the pixel grid (canvas texel_aligned_rect), so every pixel centre falls on
+  a texel centre, where bilinear and nearest sampling both return that
+  texel. texel_offset() checks from the triangle's UV gradients that the
+  mapping is 1:1 and on whole texels and gives the offset; such triangles
+  read the texel directly. Any other scale or offset keeps the filter.
+Scope: raster.rs; unit tests (host) for the 1:1 case against the texture
+  and for a scaled quad keeping its filter. WORDCRAFT_PERF counts direct
+  reads. The tests also show that a pixel centre on a quad's shared diagonal
+  is covered by both triangles (existing edge rule; unchanged here).
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wp4).
+Removal: none.
+---
+ apps/wordcraft-aros/src/perf.rs   |  4 +-
+ apps/wordcraft-aros/src/raster.rs | 90 ++++++++++++++++++++++++++++++-
+ 2 files changed, 91 insertions(+), 3 deletions(-)
+
+diff --git a/apps/wordcraft-aros/src/perf.rs b/apps/wordcraft-aros/src/perf.rs
+index bdc9087a8991306c77d59ec8da324a88bb1bd187..0c02308f43d543dcbd042894137300b146ba9ecf 100644
+--- a/apps/wordcraft-aros/src/perf.rs
++++ b/apps/wordcraft-aros/src/perf.rs
+@@ -89,7 +89,7 @@ impl Perf {
+                 "segment,at_us,wait_us,input_us,logic_us,ui_us,tess_us,textures_us,raster_us,blit_us,events,moves,keys,wheels,buttons,latency_min_us,latency_max_us,page_renders,page_render_us,texture_px,vertices,width,height,wait_timeout_ms,woke_by_event,late_us,next_delay_ms,clear_us,runs{}",
+                 ["page", "solid", "atlas"]
+                     .iter()
+-                    .flat_map(|k| ["triangles", "visited", "covered", "bilinear", "nearest", "blended", "opaque", "us"].map(move |f| format!(",{k}_{f}")))
++                    .flat_map(|k| ["triangles", "visited", "covered", "bilinear", "nearest", "blended", "opaque", "us", "direct"].map(move |f| format!(",{k}_{f}")))
+                     .collect::<String>()
+             )?;
+             for r in &self.frames {
+@@ -102,7 +102,7 @@ impl Perf {
+                 )?;
+                 write!(f, ",{},{},{},{},{},{}", r.wait_timeout_ms, r.woke_by_event, r.late_us, r.next_delay_ms, r.paint.clear_us, r.paint.runs)?;
+                 for k in &r.paint.kinds {
+-                    write!(f, ",{},{},{},{},{},{},{},{}", k.triangles, k.visited, k.covered, k.bilinear, k.nearest, k.blended, k.opaque, k.us)?;
++                    write!(f, ",{},{},{},{},{},{},{},{},{}", k.triangles, k.visited, k.covered, k.bilinear, k.nearest, k.blended, k.opaque, k.us, k.direct)?;
+                 }
+                 writeln!(f)?;
+             }
+diff --git a/apps/wordcraft-aros/src/raster.rs b/apps/wordcraft-aros/src/raster.rs
+index c8698887fd23c47ef79ff26fc63ff57522ffcd0a..0fb795f4bedd9064666cf0fefc958834d88a28d5 100644
+--- a/apps/wordcraft-aros/src/raster.rs
++++ b/apps/wordcraft-aros/src/raster.rs
+@@ -61,6 +61,8 @@ pub struct KindStats {
+     pub covered: u64,
+     pub bilinear: u64,
+     pub nearest: u64,
++    /// Texels read directly by the 1:1 path (no filtering).
++    pub direct: u64,
+     /// Covered pixels written as a blend (alpha below 255) and as an opaque copy.
+     pub blended: u64,
+     pub opaque: u64,
+@@ -256,7 +258,7 @@ fn triangle(
+     }
+     // Counted per triangle, added once at the end: no counter work in the pixel loop beyond
+     // a few local increments.
+-    let (mut covered, mut sampled, mut blended, mut opaque) = (0u64, 0u64, 0u64, 0u64);
++    let (mut covered, mut sampled, mut blended, mut opaque, mut direct_reads) = (0u64, 0u64, 0u64, 0u64, 0u64);
+     let ca = a.color.to_array();
+     let cb = b.color.to_array();
+     let cc = c.color.to_array();
+@@ -266,6 +268,13 @@ fn triangle(
+     // source colour is the same everywhere too. Same arithmetic as the per-pixel path.
+     let uniform = (a.uv == b.uv && b.uv == c.uv).then(|| texture.map(|t| t.sample(a.uv.x, a.uv.y)));
+     let modulate = |color: [f32; 4], s: [f32; 4]| [color[0] * s[0] / 255.0, color[1] * s[1] / 255.0, color[2] * s[2] / 255.0, color[3] * s[3] / 255.0];
++    // A texture drawn 1:1 on whole texels (the page image at its own scale, placed on the
++    // pixel grid): each pixel centre falls on a texel centre, where bilinear and nearest
++    // sampling both return that texel. Read it directly: texel = pixel + (ox, oy).
++    let direct = match texture {
++        Some(t) if uniform.is_none() => texel_offset(t, a, b, c, (ax, ay), (bx, by), (cx, cy), area),
++        _ => None,
++    };
+     let flat_src = match uniform {
+         Some(sample) if flat_color => {
+             let color = [ca[0] as f32, ca[1] as f32, ca[2] as f32, ca[3] as f32];
+@@ -306,6 +315,12 @@ fn triangle(
+                         };
+                         match (uniform, texture) {
+                             (Some(Some(s)), _) => modulate(color, s),
++                            (_, Some(t)) if direct.is_some() => {
++                                let (ox, oy) = direct.unwrap_or_default();
++                                let s = t.texel(px + ox, py + oy);
++                                direct_reads += 1;
++                                modulate(color, [s[0] as f32, s[1] as f32, s[2] as f32, s[3] as f32])
++                            }
+                             (_, Some(t)) => {
+                                 let u = a.uv.x * l0 + b.uv.x * l1 + c.uv.x * l2;
+                                 let v = a.uv.y * l0 + b.uv.y * l1 + c.uv.y * l2;
+@@ -351,5 +366,78 @@ fn triangle(
+         }
+         st.blended += blended;
+         st.opaque += opaque;
++        st.direct += direct_reads;
++    }
++}
++
++/// When `t` maps onto the triangle 1:1 with texel centres on pixel centres, the whole-texel
++/// offset from pixel to texel coordinates; else `None`. Positions in pixels, `area` as in
++/// `triangle`.
++#[allow(clippy::too_many_arguments)]
++fn texel_offset(t: &Texture, a: &Vertex, b: &Vertex, c: &Vertex, pa: (f32, f32), pb: (f32, f32), pc: (f32, f32), area: f32) -> Option<(i32, i32)> {
++    let (w, h) = (t.width as f32, t.height as f32);
++    // Texel coordinates (u * width - 0.5, the sampler's) are affine in the pixel position.
++    let grad = |ta: f32, tb: f32, tc: f32| {
++        let dx = ((tb - ta) * (pc.1 - pa.1) - (tc - ta) * (pb.1 - pa.1)) / area;
++        let dy = ((tc - ta) * (pb.0 - pa.0) - (tb - ta) * (pc.0 - pa.0)) / area;
++        (dx, dy)
++    };
++    let (ux, uy) = grad(a.uv.x * w, b.uv.x * w, c.uv.x * w);
++    let (vx, vy) = grad(a.uv.y * h, b.uv.y * h, c.uv.y * h);
++    const EPS: f32 = 1e-4;
++    if (ux - 1.0).abs() > EPS || uy.abs() > EPS || vx.abs() > EPS || (vy - 1.0).abs() > EPS {
++        return None;
++    }
++    // Sampler coordinate at the centre of pixel (0, 0).
++    let fx = a.uv.x * w - 0.5 + ux * (0.5 - pa.0) + uy * (0.5 - pa.1);
++    let fy = a.uv.y * h - 0.5 + vx * (0.5 - pa.0) + vy * (0.5 - pa.1);
++    let (ox, oy) = (fx.round(), fy.round());
++    ((fx - ox).abs() < 1e-3 && (fy - oy).abs() < 1e-3).then_some((ox as i32, oy as i32))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use egui::epaint::{Color32, Mesh, Pos2, Rect, TextureId};
++
++    fn frame_of(direct_ok: bool, scale: f32) -> (Vec<u8>, u64, u64) {
++        // A 7x5 texture of distinct colours drawn as a quad at (3, 2), `scale` pixels per texel.
++        let (tw, th) = (7usize, 5usize);
++        let pixels: Vec<[u8; 4]> = (0..tw * th).map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 13 % 256) as u8, 255]).collect();
++        let mut r = Renderer::new(24, 16);
++        r.measure = true;
++        r.textures.insert(TextureId::User(1), Texture { width: tw, height: th, pixels, linear: true });
++        let mut mesh = Mesh::with_texture(TextureId::User(1));
++        let rect = Rect::from_min_size(Pos2::new(3.0, 2.0), egui::vec2(tw as f32 * scale, th as f32 * scale));
++        mesh.add_rect_with_uv(rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
++        r.clear([0, 0, 0]);
++        let prim = ClippedPrimitive { clip_rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(24.0, 16.0)), primitive: Primitive::Mesh(mesh) };
++        r.paint(&[prim], 1.0);
++        let k = r.stats.kinds[Kind::Page as usize];
++        assert_eq!(k.direct > 0, direct_ok);
++        (r.frame.clone(), k.direct, k.bilinear)
++    }
++
++    #[test]
++    fn one_to_one_texture_is_read_directly_and_matches_bilinear() {
++        let (frame, direct, bilinear) = frame_of(true, 1.0);
++        // 35 texels; a pixel centre on the quad's shared diagonal is covered by both triangles
++        // (the edge rule includes both), so it is read twice.
++        assert_eq!((direct, bilinear), (36, 0), "every covered pixel read directly");
++        // Bilinear at texel centres is the texel itself: compare with the texture.
++        for y in 0..5 {
++            for x in 0..7 {
++                let i = ((2 + y) * 24 + 3 + x) * 4;
++                let t = y * 7 + x;
++                assert_eq!(&frame[i..i + 3], &[(t * 37 % 256) as u8, (t * 91 % 256) as u8, (t * 13 % 256) as u8], "pixel {x},{y}");
++            }
++        }
++    }
++
++    #[test]
++    fn scaled_texture_keeps_filtering() {
++        let (_, direct, bilinear) = frame_of(false, 2.0);
++        assert_eq!(direct, 0);
++        assert!(bilinear > 0);
+     }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,478 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 16:46:13 +0200
+Subject: [PATCH] wordcraft-aros: measure the event loop (WORDCRAFT_PERF),
+ --window
+
+Problem: the editor feels slow on x86_64 ABIv11 under QEMU TCG, and the
+  cause is not known: input handling, logic and layout, page rendering,
+  the GUI rasterizer, the blit and the loop's wake-ups are all candidates.
+Rationale: with WORDCRAFT_PERF=<file>, every pass of the loop records its
+  time asleep, input translation, app.logic, app.ui, tessellation, texture
+  upload, rasterization and blit, the events it handled, the latency of
+  its oldest and youngest event (IntuiMessage Seconds/Micros to the end of
+  the blit, both GetSysTime through CurrentTime), page renders and their
+  time (counters added to wordcraft-render::render_page), uploaded texture
+  pixels and vertices. Records stay in memory and are written as CSV at
+  exit. F9 is taken as a scenario marker. --window <w>x<h> sets the inner
+  size so two sizes can be compared.
+Scope: diagnostic. Without WORDCRAFT_PERF the loop only reads Instant a
+  few times per frame; F9 reaches the app as before. wordcraft-render
+  gains two relaxed atomic counters (not on wasm32).
+Upstream-status: local-only.
+Verification: see the port's evidence reports.
+Removal: when the responsiveness work no longer needs it.
+---
+ Cargo.lock                         |  1 +
+ apps/wordcraft-aros/Cargo.toml     |  2 +
+ apps/wordcraft-aros/c/aros_shell.c | 13 +++++
+ apps/wordcraft-aros/src/ffi.rs     | 18 ++++++
+ apps/wordcraft-aros/src/main.rs    | 87 +++++++++++++++++++++++++++--
+ apps/wordcraft-aros/src/perf.rs    | 90 ++++++++++++++++++++++++++++++
+ crates/render/src/lib.rs           | 26 ++++++++-
+ 7 files changed, 231 insertions(+), 6 deletions(-)
+ create mode 100644 apps/wordcraft-aros/src/perf.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index b5899bc688133db952d1e8129d1656f283ed8ef4..083e4cd1a09fd95089d4f40dd224e3dbe5f85d67 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5142,6 +5142,7 @@ dependencies = [
+  "wordcraft-engine",
+  "wordcraft-fonts",
+  "wordcraft-proof",
++ "wordcraft-render",
+  "wordcraft-ui-egui",
+ ]
+ 
+diff --git a/apps/wordcraft-aros/Cargo.toml b/apps/wordcraft-aros/Cargo.toml
+index 6234b95dc226912688dce5c9ada52e4983e06d52..5a94a69a21ea70051b45f27fcd57219158951692 100644
+--- a/apps/wordcraft-aros/Cargo.toml
++++ b/apps/wordcraft-aros/Cargo.toml
+@@ -27,6 +27,8 @@ wordcraft-doc = { workspace = true }
+ wordcraft-engine = { workspace = true }
+ wordcraft-proof = { workspace = true }
+ wordcraft-fonts = { workspace = true }
++# Page render counters for the WORDCRAFT_PERF measurement.
++wordcraft-render = { workspace = true }
+ wordcraft-ui-egui = { workspace = true }
+ wordcraft-control-key = { workspace = true }
+ egui = { workspace = true, features = ["default_fonts"] }
+diff --git a/apps/wordcraft-aros/c/aros_shell.c b/apps/wordcraft-aros/c/aros_shell.c
+index 975dabdd9497c1f8001aaa8bc7afaafe33b057e2..3a47a9a6ab8a637f51ddda49bab98e7b82b45ac7 100644
+--- a/apps/wordcraft-aros/c/aros_shell.c
++++ b/apps/wordcraft-aros/c/aros_shell.c
+@@ -69,6 +69,7 @@ struct wc_event {
+     int32_t focus;         /* WC_EV_FOCUS: 1 activated, 0 deactivated */
+     char text[16];         /* WC_EV_KEY: the key with its qualifiers (system charset), NUL ended */
+     char plain[8];         /* WC_EV_KEY: the key with no qualifiers, for the logical key name */
++    uint32_t secs, micros; /* the message's system time (IntuiMessage Seconds/Micros) */
+ };
+ 
+ struct wc_window {
+@@ -233,6 +234,16 @@ int32_t wc_window_wait(struct wc_window *w, int32_t timeout_ms)
+     }
+ }
+ 
++/* The system time in the clock IntuiMessages are stamped with, for measuring
++ * how long an event waited until its frame was shown. */
++void wc_systime(uint32_t *secs, uint32_t *micros)
++{
++    ULONG s = 0, m = 0;
++    CurrentTime(&s, &m);
++    *secs = s;
++    *micros = m;
++}
++
+ /* Wakes the event loop from any task (egui's request_repaint from a worker thread). */
+ void wc_window_wake(struct wc_window *w)
+ {
+@@ -284,6 +295,8 @@ int32_t wc_window_poll(struct wc_window *w, struct wc_event *ev)
+         ev->x = mx;
+         ev->y = my;
+         ev->qualifier = qual;
++        ev->secs = imsg->Seconds;
++        ev->micros = imsg->Micros;
+ 
+         switch (cls) {
+         case IDCMP_CLOSEWINDOW:
+diff --git a/apps/wordcraft-aros/src/ffi.rs b/apps/wordcraft-aros/src/ffi.rs
+index 5adda389de5e5572eb29e891a4daab45d06e4dc7..9fa599bbfc2f0c25ad40bfa25ebca9c1a5e9383f 100644
+--- a/apps/wordcraft-aros/src/ffi.rs
++++ b/apps/wordcraft-aros/src/ffi.rs
+@@ -41,6 +41,8 @@ pub struct WcEvent {
+     pub focus: i32,
+     pub text: [u8; 16],
+     pub plain: [u8; 8],
++    pub secs: u32,
++    pub micros: u32,
+ }
+ 
+ impl WcEvent {
+@@ -60,9 +62,16 @@ impl WcEvent {
+             focus: 0,
+             text: [0; 16],
+             plain: [0; 8],
++            secs: 0,
++            micros: 0,
+         }
+     }
+ 
++    /// When Intuition stamped the message, in microseconds of system time (see [`systime_us`]).
++    pub fn time_us(&self) -> i64 {
++        self.secs as i64 * 1_000_000 + self.micros as i64
++    }
++
+     /// The typed characters, converted from the system charset (ISO 8859-1 on AROS) to UTF-8.
+     pub fn text(&self) -> String {
+         latin1(&self.text)
+@@ -93,6 +102,7 @@ unsafe extern "C" {
+     fn wc_window_poll(w: *mut WcWindow, ev: *mut WcEvent) -> i32;
+     fn wc_window_blit(w: *mut WcWindow, rgba: *const u8, width: i32, height: i32, stride: i32);
+     fn wc_window_set_busy(w: *mut WcWindow, busy: i32);
++    fn wc_systime(secs: *mut u32, micros: *mut u32);
+     fn wc_window_set_title(w: *mut WcWindow, title: *const c_char);
+     fn wc_file_request(
+         w: *mut WcWindow,
+@@ -273,6 +283,14 @@ impl Drop for Window {
+     }
+ }
+ 
++/// The system time in microseconds, the clock of [`WcEvent::time_us`].
++pub fn systime_us() -> i64 {
++    let (mut s, mut m) = (0u32, 0u32);
++    // SAFETY: two valid out-pointers.
++    unsafe { wc_systime(&mut s, &mut m) };
++    s as i64 * 1_000_000 + m as i64
++}
++
+ pub fn clipboard_write_text(text: &str) -> bool {
+     let bytes = to_latin1(text);
+     // SAFETY: the buffer and its length are passed together.
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index 23198cac7a5cfc1ec5aaf8f02ab384896a717ae3..79e0028ba64ad268d7b6f48a1cb6bb72297bffd3 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -1,6 +1,6 @@
+ //! WordCraft on AROS.
+ //!
+-//! Usage: `WordCraft [--sample] [--screenshot <file.png> [--screenshot-frames <n>]] [files…]`
++//! Usage: `WordCraft [--sample] [--window <w>x<h>] [--screenshot <file.png> [--screenshot-frames <n>]] [files…]`
+ //!
+ //! The egui interface (`wordcraft-ui-egui`) is driven directly: an Intuition window
+ //! (`c/aros_shell.c`, `ffi`) delivers input, the tessellated frame is rasterized in software
+@@ -10,10 +10,12 @@
+ //!
+ //! `--screenshot <file>` writes the window's pixels after `--screenshot-frames` frames (20 by
+ //! default) and quits: a way to look at the interface where no display can be watched.
++//! `--window` sets the inner size; `WORDCRAFT_PERF=<file>` records the loop's timings (`perf`).
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
+ mod ffi;
+ mod input;
++mod perf;
+ mod raster;
+ mod services;
+ 
+@@ -92,17 +94,18 @@ fn install_logger() {
+ struct Options {
+     files: Vec<String>,
+     sample: bool,
++    window: Option<(i32, i32)>,
+     screenshot: Option<String>,
+     screenshot_frames: u64,
+ }
+ 
+ fn parse_args() -> Result<Option<Options>, String> {
+-    let mut o = Options { files: Vec::new(), sample: false, screenshot: None, screenshot_frames: 20 };
++    let mut o = Options { files: Vec::new(), sample: false, window: None, screenshot: None, screenshot_frames: 20 };
+     let mut args = std::env::args_os().skip(1);
+     while let Some(a) = args.next() {
+         match a.to_str() {
+             Some("--help") | Some("-h") => {
+-                println!("WordCraft [--sample] [--screenshot <file.png> [--screenshot-frames <n>]] [files...]");
++                println!("WordCraft [--sample] [--window <w>x<h>] [--screenshot <file.png> [--screenshot-frames <n>]] [files...]");
+                 return Ok(None);
+             }
+             Some("--version") => {
+@@ -110,6 +113,11 @@ fn parse_args() -> Result<Option<Options>, String> {
+                 return Ok(None);
+             }
+             Some("--sample") => o.sample = true,
++            Some("--window") => {
++                let v = args.next().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
++                let size = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
++                o.window = Some(size.ok_or_else(|| format!("--window: `{v}` is not <width>x<height>"))?);
++            }
+             Some("--screenshot") => o.screenshot = args.next().map(|p| p.to_string_lossy().into_owned()),
+             Some("--screenshot-frames") => {
+                 let v = args.next().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+@@ -196,7 +204,7 @@ fn main() {
+     load_user_fonts();
+ 
+     let (sw, sh) = ffi::screen_size();
+-    let (w, h) = (1440.min(sw - 16).max(760), 920.min(sh - 48).max(480));
++    let (w, h) = options.window.unwrap_or((1440.min(sw - 16).max(760), 920.min(sh - 48).max(480)));
+     let Some(window) = ffi::Window::open(w, h, "WordCraft") else {
+         eprintln!("wordcraft: cannot open a window");
+         exit(1);
+@@ -287,8 +295,11 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+     let mut busy = false;
+     let mut title = String::from("WordCraft");
+     let (sw, sh) = ffi::screen_size();
++    let mut perf = perf::Perf::from_env();
+ 
+     loop {
++        let mut rec = perf::Frame::default();
++        let loop_start = Instant::now();
+         // Sleep until something happens or the next repaint is due.
+         let due = repaint.due.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+         let timeout = match due {
+@@ -296,7 +307,31 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             None => IDLE_POLL,
+         };
+         window.wait(timeout.as_millis() as i32);
++        let woke = Instant::now();
++        rec.wait_us = perf::us(woke - loop_start);
++        let (mut oldest, mut newest) = (i64::MAX, i64::MIN);
+         while let Some(ev) = window.poll() {
++            if perf.is_some() {
++                // F9: the measurement's scenario marker, kept from the app.
++                if ev.kind == ffi::EV_KEY && ev.rawkey == 0x58 {
++                    if ev.down != 0
++                        && let Some(p) = perf.as_mut()
++                    {
++                        p.segment += 1;
++                    }
++                    continue;
++                }
++                rec.events += 1;
++                match ev.kind {
++                    ffi::EV_MOUSE_MOVE => rec.moves += 1,
++                    ffi::EV_KEY => rec.keys += 1,
++                    ffi::EV_WHEEL => rec.wheels += 1,
++                    ffi::EV_BUTTON => rec.buttons += 1,
++                    _ => {}
++                }
++                oldest = oldest.min(ev.time_us());
++                newest = newest.max(ev.time_us());
++            }
+             input.push(&ev, ppp);
+         }
+         if let Some((nw, nh)) = input.resized.take() {
+@@ -336,12 +371,23 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             }
+         }
+         app.raw_input_hook(&mut raw);
++        let (renders_before, render_ns_before) = wordcraft_render::perf::totals();
++        let input_done = Instant::now();
++        rec.input_us = perf::us(input_done - woke);
+ 
+         // The frame, as the desktop app's eframe `logic` and `ui`.
++        let mut logic_done = input_done;
+         let out = ctx.run_ui(raw, |ui| {
+             app.logic(ui.ctx());
++            logic_done = Instant::now();
+             app.ui(ui);
+         });
++        let ui_done = Instant::now();
++        rec.logic_us = perf::us(logic_done - input_done);
++        rec.ui_us = perf::us(ui_done - logic_done);
++        let (renders_after, render_ns_after) = wordcraft_render::perf::totals();
++        rec.page_renders = (renders_after - renders_before) as u32;
++        rec.page_render_us = ((render_ns_after - render_ns_before) / 1000).min(u32::MAX as u64) as u32;
+         frame += 1;
+ 
+         // What the frame asked of the platform.
+@@ -393,16 +439,44 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+         }
+ 
+         // Paint and show.
+-        renderer.update_textures(&out.textures_delta);
++        let paint_start = Instant::now();
+         let primitives = ctx.tessellate(out.shapes, out.pixels_per_point);
++        let tessellated = Instant::now();
++        renderer.update_textures(&out.textures_delta);
++        let uploaded = Instant::now();
+         renderer.clear([0xf3, 0xf3, 0xf3]);
+         renderer.paint(&primitives, out.pixels_per_point);
+         renderer.free_textures(&out.textures_delta);
++        let rasterized = Instant::now();
+         window.blit(&renderer.frame, renderer.width, renderer.height, renderer.stride());
++        let blitted = Instant::now();
++        if let Some(p) = perf.as_mut() {
++            let shown = ffi::systime_us();
++            rec.segment = p.segment;
++            rec.at_us = start.elapsed().as_micros() as u64;
++            rec.tess_us = perf::us(tessellated - paint_start);
++            rec.textures_us = perf::us(uploaded - tessellated);
++            rec.raster_us = perf::us(rasterized - uploaded);
++            rec.blit_us = perf::us(blitted - rasterized);
++            (rec.latency_min_us, rec.latency_max_us) = if rec.events > 0 { (shown - newest, shown - oldest) } else { (-1, -1) };
++            rec.texture_px = out.textures_delta.set.iter().flat_map(|(_, ds)| ds.iter()).map(|d| (d.image.width() * d.image.height()) as u64).sum();
++            rec.vertices = primitives
++                .iter()
++                .map(|p| match &p.primitive {
++                    egui::epaint::Primitive::Mesh(m) => m.vertices.len() as u32,
++                    egui::epaint::Primitive::Callback(_) => 0,
++                })
++                .sum();
++            (rec.width, rec.height) = (width as u16, height as u16);
++            p.push(rec);
++        }
+ 
+         if let Some(path) = options.screenshot.as_deref()
+             && frame >= options.screenshot_frames
+         {
++            if let Some(p) = &perf {
++                p.write();
++            }
+             match write_png(path, &renderer) {
+                 Ok(()) => eprintln!("wordcraft: wrote {path}"),
+                 Err(e) => eprintln!("wordcraft: screenshot {path}: {e}"),
+@@ -412,6 +486,9 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+         if closing || app.quit_requested {
+             log::info!("closing: event loop finished after {frame} frames");
+             save_prefs(&app);
++            if let Some(p) = &perf {
++                p.write();
++            }
+             drop(app);
+             log::info!("closing: application state dropped");
+             return 0;
+diff --git a/apps/wordcraft-aros/src/perf.rs b/apps/wordcraft-aros/src/perf.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..798e45d0f7a8e1381d30d9e7a6c242fb522eefb3
+--- /dev/null
++++ b/apps/wordcraft-aros/src/perf.rs
+@@ -0,0 +1,90 @@
++//! Responsiveness measurement: one record per pass of the event loop, kept in memory and written
++//! once, at exit, to the file named by `WORDCRAFT_PERF` (CSV). Nothing is logged while the
++//! program runs, so the measurement does not slow what it measures.
++//!
++//! Times are microseconds. `wait` is the time asleep in `Window::wait`; the phases after it are
++//! the frame's work. An event's latency runs from Intuition's stamp on its message to the end of
++//! the blit of the frame that handled it, both in the system time of `ffi::systime_us`. F9 is
++//! taken by the shell as a scenario marker and not passed on; each press starts the next segment.
++
++use std::io::Write;
++
++#[derive(Clone, Copy, Default)]
++pub struct Frame {
++    pub segment: u32,
++    /// Since the program started (`Instant`).
++    pub at_us: u64,
++    pub wait_us: u32,
++    pub input_us: u32,
++    pub logic_us: u32,
++    pub ui_us: u32,
++    pub tess_us: u32,
++    pub textures_us: u32,
++    pub raster_us: u32,
++    pub blit_us: u32,
++    pub events: u16,
++    pub moves: u16,
++    pub keys: u16,
++    pub wheels: u16,
++    pub buttons: u16,
++    /// Youngest and oldest event of the frame, age at the end of its blit; -1 without events.
++    pub latency_min_us: i64,
++    pub latency_max_us: i64,
++    pub page_renders: u32,
++    pub page_render_us: u32,
++    /// Pixels of texture data uploaded this frame (page images, the font atlas).
++    pub texture_px: u64,
++    pub vertices: u32,
++    pub width: u16,
++    pub height: u16,
++}
++
++pub struct Perf {
++    path: std::path::PathBuf,
++    frames: Vec<Frame>,
++    pub segment: u32,
++}
++
++/// Records beyond this are dropped (about an hour at a few frames a second).
++const MAX_FRAMES: usize = 50_000;
++
++impl Perf {
++    pub fn from_env() -> Option<Perf> {
++        let path = std::env::var_os("WORDCRAFT_PERF").filter(|p| !p.is_empty())?;
++        Some(Perf { path: path.into(), frames: Vec::with_capacity(MAX_FRAMES), segment: 0 })
++    }
++
++    pub fn push(&mut self, frame: Frame) {
++        if self.frames.len() < MAX_FRAMES {
++            self.frames.push(frame);
++        }
++    }
++
++    pub fn write(&self) {
++        let result = (|| -> std::io::Result<()> {
++            let mut f = std::io::BufWriter::new(std::fs::File::create(&self.path)?);
++            writeln!(
++                f,
++                "segment,at_us,wait_us,input_us,logic_us,ui_us,tess_us,textures_us,raster_us,blit_us,events,moves,keys,wheels,buttons,latency_min_us,latency_max_us,page_renders,page_render_us,texture_px,vertices,width,height"
++            )?;
++            for r in &self.frames {
++                writeln!(
++                    f,
++                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
++                    r.segment, r.at_us, r.wait_us, r.input_us, r.logic_us, r.ui_us, r.tess_us, r.textures_us, r.raster_us, r.blit_us,
++                    r.events, r.moves, r.keys, r.wheels, r.buttons, r.latency_min_us, r.latency_max_us, r.page_renders,
++                    r.page_render_us, r.texture_px, r.vertices, r.width, r.height
++                )?;
++            }
++            f.flush()
++        })();
++        if let Err(e) = result {
++            log::warn!("cannot write {}: {e}", self.path.display());
++        }
++    }
++}
++
++/// Microseconds of `d`, saturating.
++pub fn us(d: std::time::Duration) -> u32 {
++    d.as_micros().min(u32::MAX as u128) as u32
++}
+diff --git a/crates/render/src/lib.rs b/crates/render/src/lib.rs
+index 78cc1e0ca2de9dfd3d795de783594b05955e966d..ea0abc03e8d6c571822d5f01423e720b35fa5752 100644
+--- a/crates/render/src/lib.rs
++++ b/crates/render/src/lib.rs
+@@ -408,10 +408,34 @@ impl Default for RenderOptions {
+ 
+ /// Render a whole page at `scale` pixels per point.
+ pub fn render_page(doc: &Document, page: &Page, scale: f32, opts: &RenderOptions) -> Rendered {
++    #[cfg(not(target_arch = "wasm32"))]
++    let started = std::time::Instant::now();
+     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+     let w = ((page.w * scale).ceil() as u32).clamp(1, MAX_SIDE);
+     let h = ((page.h.min(1e6) * scale).ceil() as u32).clamp(1, MAX_SIDE);
+-    render_region(doc, page, w, h, Affine::scale(scale as f64), opts)
++    let out = render_region(doc, page, w, h, Affine::scale(scale as f64), opts);
++    #[cfg(not(target_arch = "wasm32"))]
++    perf::count(started.elapsed());
++    out
++}
++
++/// Page renders since the start, for a host that measures its responsiveness (the AROS shell):
++/// two relaxed counters, no locks, nothing logged.
++pub mod perf {
++    use std::sync::atomic::{AtomicU64, Ordering};
++
++    static RENDERS: AtomicU64 = AtomicU64::new(0);
++    static NANOS: AtomicU64 = AtomicU64::new(0);
++
++    pub(crate) fn count(took: std::time::Duration) {
++        RENDERS.fetch_add(1, Ordering::Relaxed);
++        NANOS.fetch_add(took.as_nanos().min(u64::MAX as u128) as u64, Ordering::Relaxed);
++    }
++
++    /// (page renders, nanoseconds spent in them) since the program started.
++    pub fn totals() -> (u64, u64) {
++        (RENDERS.load(Ordering::Relaxed), NANOS.load(Ordering::Relaxed))
++    }
+ }
+ 
+ /// Render a page into a `w`×`h` raster with `view` (page points → pixels).

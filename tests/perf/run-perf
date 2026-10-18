@@ -1,0 +1,22 @@
+.KEY NAME/A,SIZE/A
+.BRA {
+.KET }
+; One responsiveness run: the sample document at an inner size of {SIZE}.
+; After the editor has exited, its return code, the measurement and the
+; repaint causes are sent to the host (putfile, recv.py on 10.0.2.2), then
+; the marker {NAME}.done, which says the program has ended. Copies go to
+; RESULTS: as well.
+FailAt 21
+Stack 4000000
+SetEnv WORDCRAFT_NO_PREFS 1
+SetEnv WORDCRAFT_PERF RAM:wc/{NAME}.csv
+RAM:wc/WordCraft --window {SIZE} --sample
+Echo $RC >RAM:wc/{NAME}.rc
+Copy RAM:wc/{NAME}.csv RESULTS:{NAME}.csv
+Copy RAM:wc/{NAME}.causes.csv RESULTS:{NAME}.causes.csv
+Copy RAM:wc/{NAME}.rc RESULTS:{NAME}.rc
+RAM:wc/putfile RAM:wc/{NAME}.csv
+RAM:wc/putfile RAM:wc/{NAME}.causes.csv
+RAM:wc/putfile RAM:wc/{NAME}.rc
+Echo "{NAME} exited" >RAM:wc/{NAME}.done
+RAM:wc/putfile RAM:wc/{NAME}.done

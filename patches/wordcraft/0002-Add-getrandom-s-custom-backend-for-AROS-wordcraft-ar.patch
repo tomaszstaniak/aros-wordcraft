@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 15:37:40 +0200
+Subject: [PATCH] Add getrandom's custom backend for AROS
+ (wordcraft-aros-entropy)
+
+Problem: wordcraft-docx draws the salts and keys of encrypted saves from
+  getrandom 0.3, which has no AROS backend; the x86_64 ABIv11 link of
+  wordcraft-cli failed with __getrandom_v03_custom undefined.
+Rationale: the build selects --cfg getrandom_backend="custom"; this crate
+  defines the backend over the AROS C library's getentropy(), which fails
+  rather than returning weak bytes. It is the PhotoCraft AROS port's
+  photocraft-aros-entropy, renamed. wordcraft-docx links it on AROS, so
+  every program that can write an encrypted document has it.
+Scope: AROS only; other targets do not build the crate's code.
+Upstream-status: local-only.
+Verification: wordcraft-cli links for x86_64 ABIv11 with no undefined
+  symbols; not run in this commit.
+Removal: when getrandom has an AROS backend.
+---
+ Cargo.lock                     |  9 +++++++++
+ crates/aros-entropy/Cargo.toml | 14 ++++++++++++++
+ crates/aros-entropy/src/lib.rs | 31 +++++++++++++++++++++++++++++++
+ crates/docx/Cargo.toml         |  4 ++++
+ crates/docx/src/lib.rs         |  4 ++++
+ 5 files changed, 62 insertions(+)
+ create mode 100644 crates/aros-entropy/Cargo.toml
+ create mode 100644 crates/aros-entropy/src/lib.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 41d3e45e6136f52df2098cc3964df25e53e523bb..87b1bd2ddb7a3eeb1a6b4fcc7aae67e3b475f045 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5128,6 +5128,14 @@ dependencies = [
+  "zbus",
+ ]
+ 
++[[package]]
++name = "wordcraft-aros-entropy"
++version = "0.7.0"
++dependencies = [
++ "getrandom 0.3.4",
++ "libc",
++]
++
+ [[package]]
+ name = "wordcraft-cli"
+ version = "0.7.0"
+@@ -5187,6 +5195,7 @@ dependencies = [
+  "sha1",
+  "sha2",
+  "thiserror 2.0.21",
++ "wordcraft-aros-entropy",
+  "wordcraft-doc",
+  "wordcraft-geom",
+  "zeroize",
+diff --git a/crates/aros-entropy/Cargo.toml b/crates/aros-entropy/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..099f37bb067aba9e6444b0ad640b79eb352cf812
+--- /dev/null
++++ b/crates/aros-entropy/Cargo.toml
+@@ -0,0 +1,14 @@
++[package]
++name = "wordcraft-aros-entropy"
++description = "getrandom's custom backend for AROS, over the C library's getentropy()"
++version.workspace = true
++edition.workspace = true
++license.workspace = true
++
++# The one unsafe function getrandom's custom-backend contract requires.
++[lints.rust]
++unsafe_code = "allow"
++
++[target.'cfg(target_os = "aros")'.dependencies]
++getrandom = { workspace = true }
++libc = "0.2"
+diff --git a/crates/aros-entropy/src/lib.rs b/crates/aros-entropy/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a8e9a543d90208d085c34431ccaab7ab3e2ce3e6
+--- /dev/null
++++ b/crates/aros-entropy/src/lib.rs
+@@ -0,0 +1,31 @@
++//! getrandom's custom backend for AROS.
++//!
++//! getrandom 0.3 and 0.4 have no AROS backend; builds for AROS select the custom one with
++//! `--cfg getrandom_backend="custom"`, and both versions then call the one
++//! `__getrandom_v03_custom` symbol defined here (their `Error` types have the same layout).
++//! It fills the buffer from `getentropy()`, which the AROS C library adaptation implements
++//! over a jitter entropy source and which fails instead of returning weak bytes.
++//! wordcraft-docx, the one user of getrandom, links it (`use wordcraft_aros_entropy as _;`).
++
++#[cfg(target_os = "aros")]
++mod aros {
++    /// # Safety
++    /// getrandom calls it with a valid, writable buffer of `len` bytes, possibly uninitialized.
++    #[unsafe(no_mangle)]
++    unsafe fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Result<(), getrandom::Error> {
++        // getentropy() takes at most 256 bytes per call. The buffer may be uninitialized,
++        // so it is only ever handled through raw pointers.
++        let mut offset = 0;
++        while offset < len {
++            let chunk = (len - offset).min(256);
++            // SAFETY: `offset + chunk <= len`, inside the caller's buffer.
++            if unsafe { libc::getentropy(dest.add(offset).cast(), chunk) } != 0 {
++                // SAFETY: the whole buffer is writable; leave no partial output behind.
++                unsafe { core::ptr::write_bytes(dest, 0, len) };
++                return Err(getrandom::Error::new_custom(1));
++            }
++            offset += chunk;
++        }
++        Ok(())
++    }
++}
+diff --git a/crates/docx/Cargo.toml b/crates/docx/Cargo.toml
+index f51956f9540399b7b35e9e1f9438be159b756e42..fc9428a8964f0d481723cc005d5519027b042bb2 100644
+--- a/crates/docx/Cargo.toml
++++ b/crates/docx/Cargo.toml
+@@ -28,6 +28,10 @@ zeroize = { workspace = true }
+ [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+ getrandom = { workspace = true, features = ["wasm_js"] }
+ 
++# AROS: getrandom has no backend there; this crate supplies its custom one (see its docs).
++[target.'cfg(target_os = "aros")'.dependencies]
++wordcraft-aros-entropy = { path = "../aros-entropy" }
++
+ [dev-dependencies]
+ proptest = { workspace = true }
+ image = { workspace = true }
+diff --git a/crates/docx/src/lib.rs b/crates/docx/src/lib.rs
+index 5b6ac4296190474909bb7dd57e911783e313a690..9e1a94f57d1bbe76c2bdea4f8946da43dadf367d 100644
+--- a/crates/docx/src/lib.rs
++++ b/crates/docx/src/lib.rs
+@@ -7,6 +7,10 @@
+ //! error or a best-effort document, never a panic.
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
++// getrandom's custom backend on AROS: linked here, with the one crate that asks for randomness.
++#[cfg(target_os = "aros")]
++use wordcraft_aros_entropy as _;
++
+ mod chart_spec;
+ mod crypt;
+ mod custom;

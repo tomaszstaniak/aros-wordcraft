@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 16:00:03 +0200
+Subject: [PATCH] wordcraft-aros: no desktop-theme watcher
+
+Problem: WordCraft wrote its --screenshot on x86_64 ABIv11 and then never
+  exited (pool v11-2, run wc3: Status still listed RAM:wc/WordCraft
+  minutes later). The desktop-theme watcher thread sleeps and polls until
+  the theme changes and only then notices that its receiver is gone; AROS's
+  pthread library joins every thread in its exit handler.
+Rationale: AROS has no desktop theme for the watcher to read; the theme
+  setting's System choice then follows the app's default, as in tests and
+  headless screenshots.
+Scope: wordcraft-aros only.
+Upstream-status: local-only.
+Verification: see the port's evidence reports (run wc4).
+Removal: none planned; would need a theme source on AROS.
+---
+ apps/wordcraft-aros/src/main.rs | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index 8eb4228af930010ca176ac944e58b6376fdb66be..23198cac7a5cfc1ec5aaf8f02ab384896a717ae3 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -233,7 +233,7 @@ struct Repaint {
+     due: Mutex<Option<Instant>>,
+ }
+ 
+-fn new_app(ctx: &egui::Context, shared_window: services::SharedWindow, options: &Options) -> WordApp {
++fn new_app(shared_window: services::SharedWindow, options: &Options) -> WordApp {
+     let region = wordcraft_ui_egui::i18n::system_region();
+     let doc = if options.sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+     let mut session = Session::new(doc);
+@@ -246,7 +246,9 @@ fn new_app(ctx: &egui::Context, shared_window: services::SharedWindow, options:
+         let doc = app.session.blank_document();
+         app.session.set_document(doc);
+     }
+-    app.watch_desktop_theme(ctx);
++    // No `watch_desktop_theme`: AROS has no desktop theme to read, and its watcher thread polls
++    // until the theme changes, so the pthread library's exit handler, which joins every thread,
++    // would wait for it forever.
+     app.integrated_titlebar = false;
+     // Nothing to open: start on File › Home, as the desktop app does, unless that option is off.
+     if options.files.is_empty() && !options.sample {
+@@ -273,7 +275,7 @@ fn run(window: &Rc<ffi::Window>, shared_window: services::SharedWindow, options:
+             repaint.waker.wake();
+         });
+     }
+-    let mut app = new_app(&ctx, shared_window, &options);
++    let mut app = new_app(shared_window, &options);
+ 
+     let ppp = 1.0f32;
+     let (mut width, mut height) = window.inner_size();
