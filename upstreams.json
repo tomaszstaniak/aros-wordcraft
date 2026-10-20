@@ -5,6 +5,12 @@
       "commit": "fc41918814f62645b6746ed68e71e8c2c2e85d6f",
       "license": "MIT OR Apache-2.0",
       "role": "build source (tag v0.7.0); patches/wordcraft/series applies to it"
+    },
+    "egui-aros": {
+      "url": "https://github.com/tomaszstaniak/egui-aros.git",
+      "commit": "95ae1edc8c246c7194cb9e1506bc3fdb951879e8",
+      "license": "MIT OR Apache-2.0",
+      "role": "shared egui integration for AROS (window, input, CPU renderer, ASL); set egui_aros in local.json to a clone of it; scripts vendor this commit and its crate patches for the build"
     }
   }
 }

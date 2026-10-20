@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WordCraft AROS port <wordcraft-aros@invalid>
+Date: Mon, 19 Oct 2026 15:54:30 +0200
+Subject: [PATCH] wordcraft-aros: optional OpenGL build (feature glow), [GL] in
+ its title
+
+egui-aros's glow feature draws with OpenGL through gl.library (glutin's GLA
+backend, egui_glow) and falls back to the CPU renderer when no context can
+be made. The build needs gl.library to start, so it is a separate binary;
+its window title ends in [GL] so that a screenshot names the variant. The
+renderer in use is logged at start. --screenshot reads the pixels back
+from GL.
+---
+ apps/wordcraft-aros/Cargo.toml  | 4 ++++
+ apps/wordcraft-aros/src/main.rs | 8 ++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/apps/wordcraft-aros/Cargo.toml b/apps/wordcraft-aros/Cargo.toml
+index 653e206faf429b4eee969ba097a234a683b8fd6d..245c566336486c945bf5b3a48ba1d9f68e5a7593 100644
+--- a/apps/wordcraft-aros/Cargo.toml
++++ b/apps/wordcraft-aros/Cargo.toml
+@@ -13,6 +13,10 @@ publish = false
+ dbg_macro = "warn"
+ todo = "warn"
+ 
++[features]
++# Draw with OpenGL (gl.library) instead of the CPU renderer; the build needs gl.library to start.
++glow = ["egui-aros/glow"]
++
+ [[bin]]
+ name = "WordCraft"
+ path = "src/main.rs"
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index b7c6a089e50736114951ec73c0cb358f54c938b3..a2bc030482b39e596adb96aec4bb6328a50a3ec8 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -259,6 +259,12 @@ struct Shell {
+ impl egui_aros::App for Shell {
+     fn started(&mut self, window: egui_aros::WindowHandle) {
+         *self.shared_window.borrow_mut() = Some(window);
++        log::info!("renderer: {}", egui_aros::renderer_name());
++    }
++
++    // --screenshot needs the frame's pixels; with OpenGL they are read back only then.
++    fn wants_pixels(&self) -> bool {
++        self.screenshot.is_some()
+     }
+ 
+     fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+@@ -341,6 +347,8 @@ fn run(options: Options) -> i32 {
+         // Background work (autosave, the proofing checker) still gets its turn.
+         idle_poll: Some(IDLE_POLL),
+         measure_paint: shell.perf.is_some(),
++        // A build drawing with OpenGL says so in the title, so a screenshot names the variant.
++        title_suffix: if cfg!(feature = "glow") { " [GL]".to_owned() } else { String::new() },
+     };
+     let result = egui_aros::run(run_options, ctx, &mut shell);
+     // The services hold the window handle; let go of it with the window.

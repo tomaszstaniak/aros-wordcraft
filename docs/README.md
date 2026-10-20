@@ -11,4 +11,4 @@ updated: 2026-10-17
 These guides are self-contained in a standalone repository clone. They describe
 a port in progress, not a released application.
 
-- [Experimental build](releases/test3.md)
+- Experimental builds: [test 4](releases/test4.md), [test 3](releases/test3.md)

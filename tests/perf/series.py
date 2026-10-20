@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Runs repetitions of the responsiveness scenario in one booted pool guest.
 
-usage: series.py VMCTL_PY OUT_DIR PREFIX REPS [--port PORT]
+usage: series.py VMCTL_PY OUT_DIR PREFIX REPS [--port PORT] [--compare BASE CAND]
 
 The guest must show an AROS Shell with the payload unpacked to RAM:wc
 (WordCraft, putfile and run-perf) and a running TCP/IP stack. recv.py is
@@ -9,6 +9,11 @@ started here and receives the guest's reports in OUT_DIR. For each
 repetition, sizes A (1008x720) and B (640x480) alternate: run-perf starts the
 editor, drive.py runs the segments, then the close gadget and "Don't Save"
 end it. Names: PREFIX-a1, PREFIX-b1, ...
+
+With --compare, two editor binaries in RAM:wc (file names BASE and CAND) run
+instead, both at size A, in each repetition, the order swapped every
+repetition (BASE first in odd ones): PREFIX-base1, PREFIX-cand1, PREFIX-cand2,
+PREFIX-base2, ...
 
 A run counts only when the guest has sent PREFIX-xN.done, which run-perf
 sends after the editor has exited, and the report is complete: return code
@@ -59,17 +64,26 @@ def check_report(out, name):
 def main():
     tool, out, prefix, reps = sys.argv[1], Path(sys.argv[2]), sys.argv[3], int(sys.argv[4])
     port = sys.argv[sys.argv.index("--port") + 1] if "--port" in sys.argv else "8765"
+    compare = None
+    if "--compare" in sys.argv:
+        i = sys.argv.index("--compare")
+        compare = (sys.argv[i + 1], sys.argv[i + 2])
     out.mkdir(parents=True, exist_ok=True)
     recv = subprocess.Popen([sys.executable, str(HERE / "recv.py"), str(out), port],
                             stdout=open(out / "recv.log", "a"), stderr=subprocess.STDOUT)
     try:
         for n in range(1, reps + 1):
-            for key, (size, close, dont_save) in SIZES.items():
-                name = f"{prefix}-{key}{n}"
+            if compare:
+                size, close, dont_save = SIZES["a"]
+                order = [("base", compare[0]), ("cand", compare[1])]
+                runs = [(f"{prefix}-{k}{n}", size, close, dont_save, f"RAM:wc/{b}") for k, b in (order if n % 2 else order[::-1])]
+            else:
+                runs = [(f"{prefix}-{key}{n}", size, close, dont_save, None) for key, (size, close, dont_save) in SIZES.items()]
+            for name, size, close, dont_save, binary in runs:
                 if any(out.glob(f"{name}.*")):
                     raise Stop(f"{name}: results already present in {out}")
-                print(f"{time.strftime('%H:%M:%S')} {name} {size}", flush=True)
-                vmctl(tool, "type", f"Execute RAM:wc/run-perf {name} {size}", "ret")
+                print(f"{time.strftime('%H:%M:%S')} {name} {size} {binary or ''}", flush=True)
+                vmctl(tool, "type", f"Execute RAM:wc/run-perf {name} {size}" + (f" {binary}" if binary else ""), "ret")
                 time.sleep(STARTUP)
                 subprocess.run([sys.executable, str(HERE / "drive.py"), tool, str(out / f"{name}-host.jsonl")], check=True)
                 vmctl(tool, "click", *map(str, close))
