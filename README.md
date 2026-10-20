@@ -1,17 +1,21 @@
 # WordCraft for AROS
 
-An experimental AROS x86_64 ABIv11 port of [WordCraft](https://github.com/storytold/wordcraft), a word processor.
+An AROS port of [WordCraft](https://github.com/storytold/wordcraft), a word processor. It opens and saves DOCX documents and exports PDF.
 
-WordCraft opens and saves DOCX documents and exports PDF. The experimental builds include the editor and `wordcraft-cli`. The newest is test 4: the editor now runs on [egui-aros](https://github.com/tomaszstaniak/egui-aros), the AROS integration shared with the PhotoCraft, DeckCraft and GridCraft ports. Typing can still lag, especially in a large window.
+## Download and run
+
+[Download v0.7.0-test4-r2](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.7.0-test4-r2) for **AROS x86_64 ABIv11**, or find `wordcraft` in the apkg catalogue. The download includes WordCraft and `wordcraft-cli`.
+
+These builds are experimental and not optimised. They use CPU rendering and can be slow, especially in large windows.
 
 Unpack the archive into a drawer and double-click the WordCraft icon. From a Shell, run `Stack 4000000` before starting `WordCraft`.
 
-Printing, pictures through the clipboard and opening files dropped onto the window are unavailable. Export to PDF for printing elsewhere. Letters typed with a keymap for another 8-bit charset (such as the Polish one) come out as the wrong characters.
+## Known limitations
 
-## Sources and build
+Typing can lag, especially in a large window. Printing, image clipboard exchange and file drops are unavailable. Non-Latin-1 keyboard layouts can produce incorrect characters; existing document text is displayed correctly.
 
-This repository contains the pinned source revisions, AROS patches and build scripts. See [development](docs/development.md), [patching](docs/patching.md) and [upstreams.json](upstreams.json). The build also needs a clone of egui-aros at the commit pinned there.
+## Build from source
 
-Upstream sources and generated build outputs are fetched or created locally. They are not included in the repository. Mainline ABIv1 is a separate target; these binaries require ABIv11.
+This repository contains source revisions, AROS patches and build scripts. See [Building](docs/development.md), [Patch workflow](docs/patching.md) and [Source revisions](upstreams.json). The window and renderer use [egui-aros](https://github.com/tomaszstaniak/egui-aros), pinned in `upstreams.json`.
 
-Upstream and dependency licenses and author notices are retained in the application archives and pinned sources.
+The repository stores build recipes rather than a full upstream source tree. Licenses and author notices are included in the source and application archives.
