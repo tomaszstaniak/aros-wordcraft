@@ -23,6 +23,9 @@
     "assets/fonts/OFL-SourceSans3.txt",
     "assets/fonts/OFL-SourceSerif4.txt"
   ],
-  "source_archive_exclude": [],
+  "source_archive_exclude": [
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
   "notice_renames": {}
 }

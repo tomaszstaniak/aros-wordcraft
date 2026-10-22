@@ -12,3 +12,4 @@
 0012-wordcraft-aros-wake-the-event-loop-only-for-other-th.patch
 0013-wordcraft-aros-run-on-the-shared-egui-aros-integrati.patch
 0014-wordcraft-aros-optional-OpenGL-build-feature-glow-GL.patch
+0015-wordcraft-aros-keep-the-main-task-s-startup-director.patch

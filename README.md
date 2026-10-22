@@ -4,7 +4,7 @@ An AROS port of [WordCraft](https://github.com/storytold/wordcraft), a word proc
 
 ## Download and run
 
-[Download v0.7.0-test4-r2](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.7.0-test4-r2) for **AROS x86_64 ABIv11**, or find `wordcraft` in the apkg catalogue. The download includes WordCraft and `wordcraft-cli`.
+[Download v0.7.0-test5](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.7.0-test5) for **AROS x86_64 ABIv11**, or find `wordcraft` in the apkg catalogue. The download includes WordCraft and `wordcraft-cli`.
 
 These builds are experimental and not optimised. They use CPU rendering and can be slow, especially in large windows.
 

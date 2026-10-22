@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 00:15:08 +0200
+Subject: [PATCH] wordcraft-aros: keep the main task's startup directory lock
+ for the C library
+
+Problem: ABIv11 crt.library keeps chdir's saved directory in one base for
+  all tasks of the process, records the lock of whichever task changes
+  directory first, and restores it on the main task at exit. realpath()
+  changes directory (posixc/realpath.c: open(".") and fchdir), so a worker
+  thread that calls std::fs::canonicalize first makes the library unlock
+  the main task's Workbench startup lock at exit, which Workbench startup
+  then unlocks again (a double UnLock of freed memory).
+Here: its engine resolves paths with std::fs::canonicalize (file access checks, pictures, font folders), and which thread does so first depends on the start options.
+Rationale: chdir(".") on the main task before any worker starts records
+  the main task's own lock and gives the library a replacement lock it
+  owns; the directory does not change. The same change as the PdfCraft
+  AROS port's patch 0011, which a probe confirmed (CRT kept the worker's
+  lock without it, the main task's lock with it). Not reproduced as a
+  crash in WordCraft; the code path is the reason.
+Scope: the AROS GUI entry point; failure stops before any worker exists.
+Upstream-status: local-only; candidate for the AROS frontend.
+Verification: disk-based Workbench start and close in the port's evidence.
+Removal: when the C library keeps the saved directory per task.
+---
+ apps/wordcraft-aros/src/main.rs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index a2bc030482b39e596adb96aec4bb6328a50a3ec8..a22ff8ffb03805ab8160adae1e1ff5b592651c41 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -182,6 +182,17 @@ fn load_user_fonts() {
+ }
+ 
+ fn main() {
++    // ABIv11's C library keeps one saved directory for the whole process and
++    // restores it on the main task at exit. Whichever task changes directory
++    // first decides what is saved, and realpath() (std::fs::canonicalize)
++    // changes directory. If a worker does it first, the library later unlocks
++    // the main task's Workbench startup lock, which Workbench startup then
++    // unlocks again. chdir(".") here, before any worker, keeps the main task's
++    // own lock saved and gives the library a replacement it owns.
++    if let Err(error) = std::env::set_current_dir(".") {
++        eprintln!("wordcraft: cannot preserve the startup directory: {error}");
++        std::process::exit(1);
++    }
+     install_logger();
+     let options = match parse_args() {
+         Ok(Some(o)) => o,

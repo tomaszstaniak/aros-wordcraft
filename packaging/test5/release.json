@@ -1,0 +1,33 @@
+{
+  "title": "WordCraft 0.7.0 AROS ABIv11 test 5",
+  "version": "0.7.0",
+  "label": "test5",
+  "archive": "WordCraft-0.7.0-test5.x86_64-aros-v11.zip",
+  "source_archive": "WordCraft-0.7.0-test5-source.zip",
+  "release_notes": "RELEASE-NOTES-0.7.0-test5.md",
+  "drawer": "WordCraft",
+  "stack": 4000000,
+  "build": {
+    "abi": "x86_64 ABIv11",
+    "features": [],
+    "panic": "unwind",
+    "lto": "fat",
+    "strip": true
+  },
+  "icon_source": "work:assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png",
+  "wordcraft_notices": [
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "NOTICE",
+    "ATTRIBUTION.md",
+    "assets/fonts/OFL-Inter.txt",
+    "assets/fonts/OFL-JetBrainsMono.txt",
+    "assets/fonts/OFL-SourceSans3.txt",
+    "assets/fonts/OFL-SourceSerif4.txt"
+  ],
+  "source_archive_exclude": [
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "notice_renames": {}
+}
