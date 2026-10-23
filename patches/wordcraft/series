@@ -14,3 +14,5 @@
 0014-wordcraft-aros-optional-OpenGL-build-feature-glow-GL.patch
 0015-wordcraft-aros-keep-the-main-task-s-startup-director.patch
 0016-wordcraft-aros-name-the-startup-directory-in-full-wh.patch
+0017-wordcraft-aros-keep-the-startup-directory-with-an-em.patch
+0018-wordcraft-aros-make-document-names-from-the-command-.patch

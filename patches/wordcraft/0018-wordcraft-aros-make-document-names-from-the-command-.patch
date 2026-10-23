@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 11:24:11 +0200
+Subject: [PATCH] wordcraft-aros: make document names from the command line
+ absolute
+
+Problem: a document named relatively in a Shell (`WordCraft letter.docx`)
+  was kept as typed, in the Recent list and as the document's path.
+  A later start from Workbench runs in the program's drawer, where the
+  name means another file: DeckCraft listed such a file as missing
+  (AROS One 1.3, pool v11-2, 2026-10-23).
+Rationale: the name is made absolute when the arguments are read, in
+  the directory it was typed in, with AmigaDOS rules: a name with a
+  volume or assign stays as it is, a leading ":" is the volume's root,
+  a leading "/" the parent drawer. std::path::absolute follows POSIX
+  rules, and std::fs::canonicalize fails for AmigaDOS paths in this
+  SDK. Names chosen in the file requester are absolute already.
+  Entries already in the Recent list stay as they are: the directory
+  they were typed in is not known.
+Scope: the AROS GUI entry point; new src/amiga_path.rs.
+Upstream-status: local-only.
+Verification: amiga_path's unit tests on the host; guest runs in the
+  port's evidence.
+Removal: when the program makes start-up names absolute itself.
+---
+ apps/wordcraft-aros/src/amiga_path.rs | 102 ++++++++++++++++++++++++++
+ apps/wordcraft-aros/src/main.rs       |   4 +-
+ 2 files changed, 105 insertions(+), 1 deletion(-)
+ create mode 100644 apps/wordcraft-aros/src/amiga_path.rs
+
+diff --git a/apps/wordcraft-aros/src/amiga_path.rs b/apps/wordcraft-aros/src/amiga_path.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..8655481d2b116674f2509796b42749c5c87c5bb1
+--- /dev/null
++++ b/apps/wordcraft-aros/src/amiga_path.rs
+@@ -0,0 +1,102 @@
++//! Names of documents given on the command line, made absolute with AmigaDOS rules.
++//!
++//! A name typed in a Shell is relative to that Shell's current directory. The program keeps it
++//! (the Recent list, the document's own path), and a later start from Workbench runs in the
++//! program's drawer, where the same name means another file. So the name is made absolute while
++//! the directory it was typed in is still the current one. Rust's `std::path::absolute` follows
++//! POSIX: it would put the directory before `Work:a` and read a leading `/` as the root, which
++//! in AmigaDOS is the parent. `std::fs::canonicalize` fails for every AmigaDOS path on ABIv11
++//! (its `realpath` opens `"."`, a file name there), so it cannot be used either.
++
++/// `name` as an absolute name, relative to the current directory. Unchanged when the current
++/// directory has no name that is valid UTF-8, the form the rest of the program uses for paths.
++pub fn absolute(name: &str) -> String {
++    match std::env::current_dir() {
++        Ok(dir) => match dir.to_str() {
++            Some(dir) => join(dir, name),
++            None => name.to_owned(),
++        },
++        Err(_) => name.to_owned(),
++    }
++}
++
++/// `name` relative to the absolute drawer `dir` (`Work:Docs`, `RAM:`):
++/// - a name with a volume, device or assign (`Work:a`, `DOCS:a`) is absolute already;
++/// - `:a` is `a` at the root of `dir`'s volume;
++/// - each leading `/` is the parent drawer; at a volume's root there is none, and the name is
++///   left for DOS to refuse when it is used.
++///
++/// The rest of the name (`a/b`, even `a//b`) is DOS's to read.
++pub fn join(dir: &str, name: &str) -> String {
++    if name.split('/').next().is_some_and(|first| first.contains(':')) {
++        if let Some(rest) = name.strip_prefix(':')
++            && let Some(colon) = dir.find(':')
++        {
++            return format!("{}{rest}", &dir[..=colon]);
++        }
++        return name.to_owned();
++    }
++    let mut dir = dir;
++    let mut rest = name;
++    while let Some(after) = rest.strip_prefix('/') {
++        match dir.rfind('/') {
++            Some(slash) => dir = &dir[..slash],
++            None if !dir.ends_with(':') && dir.contains(':') => dir = &dir[..=dir.find(':').unwrap_or(0)],
++            None => break,
++        }
++        rest = after;
++    }
++    if rest.is_empty() {
++        dir.to_owned()
++    } else if dir.ends_with(':') {
++        format!("{dir}{rest}")
++    } else {
++        format!("{dir}/{rest}")
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::join;
++
++    #[test]
++    fn names_in_the_current_drawer() {
++        assert_eq!(join("Work:Docs", "a.docx"), "Work:Docs/a.docx");
++        assert_eq!(join("Work:Docs", "Sub/a.docx"), "Work:Docs/Sub/a.docx");
++        assert_eq!(join("RAM:", "a.docx"), "RAM:a.docx", "no `/` after the colon: that would be the parent");
++        assert_eq!(join("AROS:My Docs", "Q3 report.docx"), "AROS:My Docs/Q3 report.docx");
++        assert_eq!(join("AROS:Bücher", "zażółć.docx"), "AROS:Bücher/zażółć.docx");
++    }
++
++    #[test]
++    fn names_with_a_volume_or_assign_stay_as_given() {
++        assert_eq!(join("Work:Docs", "DH1:a.docx"), "DH1:a.docx");
++        assert_eq!(join("Work:Docs", "DOCS:Old/a.docx"), "DOCS:Old/a.docx");
++        assert_eq!(join("Work:Docs", "Ram Disk:a.docx"), "Ram Disk:a.docx");
++    }
++
++    #[test]
++    fn a_leading_colon_is_the_root_of_the_same_volume() {
++        assert_eq!(join("Work:Docs/Sub", ":a.docx"), "Work:a.docx");
++        assert_eq!(join("Work:", ":Docs/a.docx"), "Work:Docs/a.docx");
++    }
++
++    #[test]
++    fn each_leading_slash_is_the_parent() {
++        assert_eq!(join("Work:Docs/Sub", "/a.docx"), "Work:Docs/a.docx");
++        assert_eq!(join("Work:Docs/Sub", "//a.docx"), "Work:a.docx");
++        assert_eq!(join("Work:Docs", "/"), "Work:");
++        assert_eq!(join("Work:Docs/Sub", "/Other/a.docx"), "Work:Docs/Other/a.docx");
++    }
++
++    #[test]
++    fn a_parent_above_the_root_is_left_for_dos() {
++        assert_eq!(join("Work:", "/a.docx"), "Work:/a.docx");
++        assert_eq!(join("Work:Docs", "///a.docx"), "Work://a.docx");
++    }
++
++    #[test]
++    fn later_slashes_are_dos_business() {
++        assert_eq!(join("Work:Docs", "a//b.docx"), "Work:Docs/a//b.docx");
++    }
++}
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+index e2b6b51d442a7cc877173518ae77e3d1bfcd3b1b..4d37f382a38d5c068ff8fe9c714093094f82d0f6 100644
+--- a/apps/wordcraft-aros/src/main.rs
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -12,6 +12,7 @@
+ //! `--window` sets the inner size; `WORDCRAFT_PERF=<file>` records the loop's timings (`perf`).
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
++mod amiga_path;
+ mod perf;
+ mod services;
+ 
+@@ -119,7 +120,8 @@ fn parse_args() -> Result<Option<Options>, String> {
+                 let v = args.next().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                 o.screenshot_frames = v.parse().map_err(|_| format!("--screenshot-frames: `{v}` is not a number"))?;
+             }
+-            Some(s) => o.files.push(s.to_owned()),
++            // Made absolute now, in the directory it was typed in (see `amiga_path`).
++            Some(s) => o.files.push(amiga_path::absolute(s)),
+             None => return Err(format!("argument is not valid text: {}", a.to_string_lossy())),
+         }
+     }
