@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 12:39:22 +0100
+Subject: [PATCH] AROS: rasterize without worker threads
+
+AROS's pthread library waits for every thread when a program exits. The render context pool keeps a vello_cpu context, with its worker threads, in a static that is never dropped, so the editor never ended after its window closed once rust-aros could count CPUs (pool v11-1, 2026-11-07: "pthread thread #2" waiting after main returned). default_threads() is 0 on AROS, as on the web: vello_cpu renders on the calling thread. The VectorCraft port does the same.
+---
+ crates/render/src/lib.rs | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/crates/render/src/lib.rs b/crates/render/src/lib.rs
+index c21f88063e480a57ced965c2b867145cd86c81de..ca84e84cac6f20a86062f00e5049176097d22666 100644
+--- a/crates/render/src/lib.rs
++++ b/crates/render/src/lib.rs
+@@ -26,13 +26,22 @@ use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vec
+ mod color_glyph;
+ pub mod icon_lib;
+ 
+-/// Worker threads for rasterising (0 on the web, where there are no threads).
++/// Worker threads for rasterising (0 on the web, where there are no threads, and on AROS: see
++/// below).
+ pub fn default_threads() -> u16 {
+     #[cfg(target_arch = "wasm32")]
+     {
+         0
+     }
+-    #[cfg(not(target_arch = "wasm32"))]
++    // AROS's pthread library waits for every thread when the program exits, and the context pool
++    // keeps a render context, with its vello_cpu workers, in a static that is never dropped: a
++    // program that rendered once would never end. Without workers vello_cpu renders on the
++    // calling thread.
++    #[cfg(target_os = "aros")]
++    {
++        0
++    }
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     {
+         std::thread::available_parallelism().map(|n| (n.get().saturating_sub(1)).clamp(1, 8) as u16).unwrap_or(2)
+     }

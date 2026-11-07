@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:34:04 +0100
+Subject: [PATCH] AROS: the CLI turns DOS volume requesters off
+
+Unix-style probes (/.flatpak-info for the control key, /usr and /opt data folders) name volumes that do not exist on AROS; each opened an "insert volume" requester that stopped the command until answered. aros-startup's quiet_dos makes DOS return an error instead, as the GUI does.
+---
+ apps/wordcraft-cli/Cargo.toml  | 2 ++
+ apps/wordcraft-cli/src/main.rs | 4 ++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/apps/wordcraft-cli/Cargo.toml b/apps/wordcraft-cli/Cargo.toml
+index 94226e08884dd8da827f453a1e72d10aaffd2add..d68fc1b2e75f59403d79f8db7d2cfddcbcb92302 100644
+--- a/apps/wordcraft-cli/Cargo.toml
++++ b/apps/wordcraft-cli/Cargo.toml
+@@ -26,3 +26,5 @@ sys-locale = "0.3"
+ # which AROS's pthread library otherwise waits for forever when the program exits.
+ [target.'cfg(target_os = "aros")'.dependencies]
+ rayon-core = "1.13"
++# Program start on AROS (from the egui-aros repository, without egui), supplied by the port's build.
++aros-startup = "0.1"
+diff --git a/apps/wordcraft-cli/src/main.rs b/apps/wordcraft-cli/src/main.rs
+index 9371949daf44d6d89c43b36a8465bb636d2e63ee..8cce2f6b489285fbb16412817289d83daab325a6 100644
+--- a/apps/wordcraft-cli/src/main.rs
++++ b/apps/wordcraft-cli/src/main.rs
+@@ -766,6 +766,10 @@ fn parity_markdown(p: &Value) -> String {
+ const AROS_STACK: usize = 8 << 20;
+ 
+ fn main() -> ExitCode {
++    // AROS: the Unix-style probes (the Flatpak marker, /usr and /opt data folders) name volumes
++    // that do not exist; DOS answers them with an error instead of an "insert volume" requester.
++    #[cfg(target_os = "aros")]
++    aros_startup::quiet_dos();
+     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+     // Language packs installed in the suite's font store are used; `proof.installPack` installs
+     // only while the person has turned downloading on in the app.

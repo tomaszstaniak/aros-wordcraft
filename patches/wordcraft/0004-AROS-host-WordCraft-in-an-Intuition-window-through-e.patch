@@ -1,0 +1,738 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:10:25 +0100
+Subject: [PATCH] AROS host: WordCraft in an Intuition window through egui-aros
+
+apps/wordcraft-aros runs the egui interface with egui-aros: winit and egui-winit for the window and input, the CPU renderer or OpenGL chosen at run time (--gui-renderer, ToolType GUI_RENDERER, the GUI_RENDERER variable; AUTO by default, which closes a software rasterizer's context and draws with the CPU), ASL requesters, and the system clipboard for text (system character set, UTF-8 under CSET 106) and pictures (datatypes; Paste inserts them through the existing clipboard_picture service). It follows the desktop app's start-up: preferences, user fonts and dictionary, recovery, the Start screen, document names from the Shell or Workbench resolved by DOS. Settings, the log and recovery data live in WordCraftData beside the program (WORDCRAFT_PROFILE_DIR). The program runs in the -nix path mode; requesters' DOS names are converted at the edge. The Cargo.lock entries for egui-aros come from the build (scripts/craft.py), as for the other Craft ports.
+---
+ apps/wordcraft-aros/Cargo.toml      |  41 +++
+ apps/wordcraft-aros/src/main.rs     | 534 ++++++++++++++++++++++++++++
+ apps/wordcraft-aros/src/services.rs | 130 +++++++
+ 3 files changed, 705 insertions(+)
+ create mode 100644 apps/wordcraft-aros/Cargo.toml
+ create mode 100644 apps/wordcraft-aros/src/main.rs
+ create mode 100644 apps/wordcraft-aros/src/services.rs
+
+diff --git a/apps/wordcraft-aros/Cargo.toml b/apps/wordcraft-aros/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..521ecfd71d46d083dddae628faa1c52c55c1dbb9
+--- /dev/null
++++ b/apps/wordcraft-aros/Cargo.toml
+@@ -0,0 +1,41 @@
++[package]
++name = "wordcraft-aros"
++description = "WordCraft on AROS: the egui interface in an Intuition window, through egui-aros"
++version.workspace = true
++edition.workspace = true
++license.workspace = true
++publish = false
++
++# The window, input, renderers, requesters, clipboard, character set and start-up data come
++# from egui-aros (shared by the Craft AROS ports); this crate has no `unsafe` code of its own.
++
++[lints.clippy]
++dbg_macro = "warn"
++todo = "warn"
++
++[[bin]]
++name = "WordCraft"
++path = "src/main.rs"
++
++[dependencies]
++wordcraft-doc = { workspace = true }
++wordcraft-engine = { workspace = true }
++wordcraft-proof = { workspace = true }
++wordcraft-fonts = { workspace = true }
++wordcraft-ui-egui = { workspace = true }
++wordcraft-control-key = { workspace = true }
++egui = { workspace = true, features = ["default_fonts"] }
++# Built from a pinned egui-aros commit with its crate patches: see the port's scripts/craft.py.
++# OpenGL is compiled in and chosen at run time (CPU, AUTO or GPU).
++egui-aros = { version = "0.1", features = ["asl", "glow"] }
++# Its minimum_stack! macro (egui_aros::startup is the same crate).
++aros-startup = "0.1"
++serde_json = { workspace = true }
++log = { workspace = true }
++# --screenshot writes PNG.
++image = { workspace = true }
++
++# The patched rayon-core (see the port's crate patches) can end the global pool's threads, which
++# AROS's pthread library otherwise waits for forever when the program exits.
++[target.'cfg(target_os = "aros")'.dependencies]
++rayon-core = "1.13"
+diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b36e5e51d8f133eae444edf38fc9b96fe09570bf
+--- /dev/null
++++ b/apps/wordcraft-aros/src/main.rs
+@@ -0,0 +1,534 @@
++//! WordCraft on AROS.
++//!
++//! The egui interface (`wordcraft-ui-egui`) runs in an Intuition window through egui-aros: winit
++//! and egui-winit for the window and input, the CPU renderer or OpenGL for the pixels (chosen at
++//! run time: `--gui-renderer`, ToolType `GUI_RENDERER`), ASL for files, the system clipboard for
++//! text and pictures. The engine, documents and file formats are the same as on the other
++//! platforms; this file and `services` follow the desktop app (apps/wordcraft/src/main.rs).
++//!
++//! `--screenshot <file>` writes the window's pixels after `--screenshot-frames` frames (20 by
++//! default) and quits: a way to look at the interface where no display can be watched.
++//! `--window` sets the inner size. Settings, the log and recovery data are kept in
++//! `WordCraftData` in the program's drawer (or `WORDCRAFT_PROFILE_DIR`).
++#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
++
++mod services;
++
++use std::cell::RefCell;
++use std::rc::Rc;
++use std::sync::Mutex;
++use std::time::Duration;
++
++use egui_aros::{launch, startup};
++use wordcraft_engine::Session;
++use wordcraft_ui_egui::{UiState, WordApp};
++
++/// Longest sleep when nothing asks for a repaint: background work (autosave, recovery, the
++/// proofing checker) still gets its turn.
++const IDLE_POLL: Duration = Duration::from_millis(500);
++
++/// The release name packaging gives (`--version`, the log), else the crate version.
++const RELEASE: &str = match option_env!("WORDCRAFT_RELEASE") {
++    Some(r) => r,
++    None => env!("CARGO_PKG_VERSION"),
++};
++const TARGET: &str = match option_env!("WORDCRAFT_BUILD_TARGET") {
++    Some(t) => t,
++    None => "aros",
++};
++
++const USAGE: &str = "\
++WordCraft for AROS
++
++Usage: WordCraft [--gui-renderer CPU|AUTO|GPU] [--sample] [--window <w>x<h>]
++                 [--screenshot <file.png> [--screenshot-frames <n>]] [--test-steps <file.json>] [FILE...]
++";
++
++struct Logger;
++
++impl log::Log for Logger {
++    fn enabled(&self, metadata: &log::Metadata) -> bool {
++        metadata.level() <= log::max_level()
++    }
++
++    fn log(&self, record: &log::Record) {
++        if self.enabled(record.metadata()) {
++            log_line(&format!("{} {}: {}", record.level(), record.target(), record.args()));
++        }
++    }
++
++    fn flush(&self) {}
++}
++
++static LOGGER: Logger = Logger;
++
++/// The log file: `WORDCRAFT_LOG` if set, else `WordCraft.log` in the settings folder. A program
++/// started from Workbench has no console, and the AROS Shell cannot redirect a command's error
++/// output, so a failure would otherwise leave nothing to read. Shell starts also print it.
++static LOG_FILE: std::sync::OnceLock<Option<Mutex<std::fs::File>>> = std::sync::OnceLock::new();
++static SHELL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
++
++fn log_line(line: &str) {
++    use std::io::Write;
++    let file = LOG_FILE.get_or_init(|| {
++        let path = std::env::var_os("WORDCRAFT_LOG")
++            .filter(|p| !p.is_empty())
++            .map(std::path::PathBuf::from)
++            .or_else(|| wordcraft_control_key::settings_dir().map(|d| d.join("WordCraft.log")))?;
++        std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(Mutex::new)
++    });
++    if let Some(file) = file {
++        let mut file = file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
++        let _ = writeln!(file, "wordcraft: {line}");
++        let _ = file.flush();
++    }
++    if SHELL.load(std::sync::atomic::Ordering::Relaxed) || file.is_none() {
++        let _ = writeln!(std::io::stderr(), "wordcraft: {line}");
++    }
++}
++
++fn install_logger() {
++    let level = match std::env::var("RUST_LOG").ok().as_deref().map(str::trim) {
++        Some("trace") => log::LevelFilter::Trace,
++        Some("debug") => log::LevelFilter::Debug,
++        Some("warn") => log::LevelFilter::Warn,
++        Some("error") => log::LevelFilter::Error,
++        Some("off") => log::LevelFilter::Off,
++        _ => log::LevelFilter::Info,
++    };
++    let default_hook = std::panic::take_hook();
++    std::panic::set_hook(Box::new(move |info| {
++        log::error!("WordCraft internal error: {info}");
++        default_hook(info);
++    }));
++    if log::set_logger(&LOGGER).is_ok() {
++        log::set_max_level(level);
++    }
++}
++
++struct Options {
++    files: Vec<String>,
++    sample: bool,
++    window: Option<(i32, i32)>,
++    screenshot: Option<String>,
++    screenshot_frames: u64,
++    test_steps: Vec<Step>,
++}
++
++/// One step of `--test-steps`: at frame `frame`, run a command (as the ribbon and menus do), take
++/// a screenshot or quit. A test aid for systems where the window cannot be driven reliably by
++/// pointer and keys (slow emulated frames); each command's result is logged.
++#[derive(Debug)]
++struct Step {
++    frame: u64,
++    run: Option<(String, serde_json::Value)>,
++    screenshot: Option<String>,
++    quit: bool,
++}
++
++fn read_steps(path: &str) -> Result<Vec<Step>, String> {
++    let text = std::fs::read_to_string(path).map_err(|e| format!("--test-steps {path}: {e}"))?;
++    let list: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| format!("--test-steps {path}: {e}"))?;
++    let mut steps = Vec::new();
++    for v in list {
++        let frame = v.get("frame").and_then(serde_json::Value::as_u64).ok_or_else(|| format!("--test-steps: a step without a frame: {v}"))?;
++        steps.push(Step {
++            frame,
++            run: v.get("run").and_then(serde_json::Value::as_str).map(|id| (id.to_owned(), v.get("params").cloned().unwrap_or(serde_json::json!({})))),
++            screenshot: v.get("screenshot").and_then(serde_json::Value::as_str).map(str::to_owned),
++            quit: v.get("quit").and_then(serde_json::Value::as_bool).unwrap_or(false),
++        });
++    }
++    steps.sort_by_key(|s| s.frame);
++    Ok(steps)
++}
++
++/// The Shell arguments after the renderer choice was taken out. Document names are resolved by
++/// DOS now, in the directory they were typed in (volumes, assigns, relative names, `/` parents).
++fn parse_args(args: Vec<String>) -> Result<Option<Options>, String> {
++    let mut o = Options { files: Vec::new(), sample: false, window: None, screenshot: None, screenshot_frames: 20, test_steps: Vec::new() };
++    let mut args = args.into_iter();
++    while let Some(a) = args.next() {
++        match a.as_str() {
++            "--help" | "-h" => {
++                println!("{USAGE}\n{}", launch::HELP);
++                return Ok(None);
++            }
++            "--version" => {
++                println!("WordCraft {RELEASE} for AROS ({TARGET})");
++                return Ok(None);
++            }
++            "--sample" => o.sample = true,
++            "--window" => {
++                let v = args.next().unwrap_or_default();
++                let size = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
++                o.window = Some(size.ok_or_else(|| format!("--window: \"{v}\" is not <width>x<height>"))?);
++            }
++            "--screenshot" => o.screenshot = args.next(),
++            "--test-steps" => o.test_steps = read_steps(&args.next().unwrap_or_default())?,
++            "--screenshot-frames" => {
++                let v = args.next().unwrap_or_default();
++                o.screenshot_frames = v.parse().map_err(|_| format!("--screenshot-frames: \"{v}\" is not a number"))?;
++            }
++            "--" => {
++                for name in args.by_ref() {
++                    o.files.push(resolve(&name)?);
++                }
++            }
++            s if s.starts_with("--") => return Err(format!("unknown option \"{s}\"; see --help")),
++            name => o.files.push(resolve(name)?),
++        }
++    }
++    Ok(Some(o))
++}
++
++fn resolve(name: &str) -> Result<String, String> {
++    startup::absolute(name).map(|p| p.to_string_lossy().into_owned()).map_err(|e| format!("{name}: {e}"))
++}
++
++fn prefs_enabled() -> bool {
++    std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
++}
++
++fn prefs_path() -> Option<std::path::PathBuf> {
++    wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
++}
++
++fn load_prefs(app: &mut WordApp) {
++    if !prefs_enabled() {
++        return;
++    }
++    if let Some(p) = prefs_path()
++        && let Ok(bytes) = std::fs::read(&p)
++        && let Some(ui) = UiState::from_json(&bytes)
++    {
++        app.apply_prefs(ui);
++    }
++}
++
++fn save_prefs(app: &WordApp) {
++    if !prefs_enabled() {
++        return;
++    }
++    if let Some(p) = prefs_path() {
++        if let Some(dir) = p.parent() {
++            let _ = std::fs::create_dir_all(dir);
++        }
++        if let Ok(bytes) = serde_json::to_vec_pretty(&app.prefs()) {
++            let _ = std::fs::write(&p, bytes);
++        }
++    }
++}
++
++fn load_user_dictionary(app: &mut WordApp) {
++    if !prefs_enabled() {
++        return;
++    }
++    if let Some(p) = wordcraft_control_key::settings_dir().map(|b| b.join(Session::USER_DICT_FILE)) {
++        wordcraft_proof::load_user_dictionary(&p);
++        app.session.user_dict_path = Some(p);
++    }
++}
++
++fn load_user_fonts() {
++    if !prefs_enabled() {
++        return;
++    }
++    let Some(dir) = wordcraft_control_key::settings_dir().map(|d| d.join("fonts")) else { return };
++    let (loaded, skipped) = wordcraft_fonts::FontDb::global().load_user_fonts(&dir);
++    if !loaded.is_empty() || !skipped.is_empty() {
++        log::info!("user fonts: {} loaded, {} skipped from {}", loaded.len(), skipped.len(), dir.display());
++    }
++}
++
++/// Stops with `message`: on the console and, for a Workbench start, in a requester.
++fn fail(message: &str) -> std::process::ExitCode {
++    startup::show_error("WordCraft", message);
++    std::process::ExitCode::from(20)
++}
++
++// The main task's stack: a Shell start gives the program the Shell's (40,960 bytes on AROS One),
++// which the window loop overruns; the start-up code runs the program on 16 MiB instead.
++aros_startup::minimum_stack!(16 << 20);
++
++fn main() -> std::process::ExitCode {
++    // Unix-style probes (settings, fonts) must not open "insert volume" requesters.
++    startup::quiet_dos();
++    // ABIv11's C library keeps one saved directory for the whole process and restores it on the
++    // main task at exit; whichever task changes directory first decides what is saved. This
++    // chdir, before any worker can make one, keeps the main task's own (Workbench start) lock.
++    if let Err(e) = std::env::set_current_dir(".") {
++        return fail(&format!("cannot keep the start directory: {e}"));
++    }
++    let start = match startup::startup(&[launch::KEY]) {
++        Ok(s) => s,
++        Err(e) => return fail(&e),
++    };
++    SHELL.store(!start.workbench, std::sync::atomic::Ordering::Relaxed);
++    // Settings beside the program unless the user chose a folder: a portable drawer.
++    match startup::program_dir() {
++        Ok(dir) => startup::set_default_env("WORDCRAFT_PROFILE_DIR", &dir.join("WordCraftData")),
++        Err(e) => return fail(&format!("cannot find the program's drawer: {e}")),
++    }
++    if prefs_enabled()
++        && let Some(dir) = wordcraft_control_key::settings_dir()
++        && let Err(e) = std::fs::create_dir_all(&dir)
++    {
++        eprintln!("wordcraft: cannot create the settings folder {}: {e}", dir.display());
++    }
++    install_logger();
++    let mut args: Vec<String> = if start.workbench { Vec::new() } else { std::env::args().skip(1).collect() };
++    let env = std::env::var("GUI_RENDERER").ok();
++    let choice = match launch::choose(&mut args, &start.tooltypes, env.as_deref(), egui_aros::RendererRequest::Auto) {
++        Ok(c) => c,
++        Err(e) => return fail(&e),
++    };
++    let mut options = match parse_args(args) {
++        Ok(Some(o)) => o,
++        Ok(None) => return std::process::ExitCode::SUCCESS,
++        Err(e) => return fail(&e),
++    };
++    options.files.extend(start.files);
++    log::info!("WordCraft {RELEASE} for AROS ({TARGET}); start from {}", if start.workbench { "Workbench" } else { "Shell" });
++    log::info!("GUI_RENDERER requested {} (from {})", launch::request_name(choice.request), choice.source.name());
++    load_user_fonts();
++    let code = run(options, choice);
++    // AROS's pthread library joins every thread, detached ones included, in its exit handler;
++    // the idle workers of rayon's global pool never end by themselves. Nothing uses the pool
++    // after this point.
++    #[cfg(target_os = "aros")]
++    rayon_core::terminate_global_thread_pool();
++    log::info!("shutdown: exit({code})");
++    std::process::ExitCode::from(code)
++}
++
++fn new_app(shared_window: services::SharedWindow, options: &Options, ctx: &egui::Context) -> WordApp {
++    let region = wordcraft_ui_egui::i18n::system_region();
++    let doc = if options.sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
++    let mut session = Session::new(doc);
++    session.system_region = region;
++    let mut app = WordApp::new(session, services::aros(shared_window));
++    load_prefs(&mut app);
++    load_user_dictionary(&mut app);
++    // Language packs: those installed in the suite's font store are used; downloading them over
++    // HTTPS is not offered on AROS (not verified there).
++    wordcraft_engine::packs::use_font_store(false);
++    if !options.sample && app.session.prefs.region.is_some() {
++        let doc = app.session.blank_document();
++        app.replace_startup_document(doc);
++    }
++    if prefs_enabled()
++        && let Some(dir) = wordcraft_control_key::settings_dir()
++    {
++        let ctx = ctx.clone();
++        if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
++            log::warn!("local recovery unavailable: {e}");
++        }
++    }
++    // No `watch_desktop_theme`: AROS has no desktop theme to read, and its watcher thread polls
++    // until the theme changes, so the pthread library's exit handler, which joins every thread,
++    // would wait for it forever.
++    app.integrated_titlebar = false;
++    if options.files.is_empty() && !options.sample {
++        app.start_screen();
++    }
++    for f in &options.files {
++        if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
++            app.report_open_failure(f, &e);
++        }
++    }
++    app
++}
++
++/// The editor as egui-aros runs it: the desktop app's eframe `logic` and `ui`, its close
++/// prompt, and the screenshot hook.
++struct Host {
++    app: WordApp,
++    shared_window: services::SharedWindow,
++    ctx: egui::Context,
++    screenshot: Option<(String, u64)>,
++    done: bool,
++    renderer_logged: bool,
++    steps: std::collections::VecDeque<Step>,
++    frame: u64,
++    step_shot: Option<String>,
++    /// Per frame: (whole frame, raster + present), for the summary in the log at shutdown.
++    frame_costs: Vec<(Duration, Duration)>,
++}
++
++/// One log line: frames, and the median, mean and longest frame and raster+present times.
++fn frame_summary(costs: &[(Duration, Duration)]) -> String {
++    if costs.is_empty() {
++        return "no frames".to_owned();
++    }
++    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
++    let stats = |mut v: Vec<f64>| {
++        v.sort_by(f64::total_cmp);
++        let mean = v.iter().sum::<f64>() / v.len() as f64;
++        format!("median {:.0} ms, mean {:.0} ms, max {:.0} ms", v[v.len() / 2], mean, v[v.len() - 1])
++    };
++    format!(
++        "{} frames; frame {}; raster+present {}",
++        costs.len(),
++        stats(costs.iter().map(|c| ms(c.0)).collect()),
++        stats(costs.iter().map(|c| ms(c.1)).collect())
++    )
++}
++
++impl egui_aros::App for Host {
++    fn started(&mut self, window: egui_aros::WindowHandle) {
++        *self.shared_window.borrow_mut() = Some(window);
++    }
++
++    // --screenshot needs the frame's pixels; with OpenGL they are read back only then.
++    fn wants_pixels(&self) -> bool {
++        self.screenshot.is_some() || self.step_shot.is_some()
++    }
++
++    fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
++        self.app.raw_input_hook(&self.ctx, raw);
++    }
++
++    fn logic(&mut self, ctx: &egui::Context) {
++        self.app.logic(ctx);
++        while self.steps.front().is_some_and(|s| s.frame <= self.frame) {
++            let Some(step) = self.steps.pop_front() else { break };
++            if let Some((id, params)) = step.run {
++                let r = self.app.run(&id, params);
++                log::info!("test step {}: {id}: {}", step.frame, match &r { Ok(v) => format!("ok {v}"), Err(e) => format!("error {e}") });
++            }
++            if step.screenshot.is_some() {
++                self.step_shot = step.screenshot;
++            }
++            if step.quit {
++                log::info!("test step {}: quit", step.frame);
++                self.done = true;
++            }
++            ctx.request_repaint();
++        }
++        if !self.steps.is_empty() {
++            ctx.request_repaint();
++        }
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui) {
++        self.app.ui(ui);
++    }
++
++    // The close gadget asks the app first: with unsaved changes it shows "Save changes?" and
++    // sets `quit_requested` once that is answered.
++    fn close_requested(&mut self) -> bool {
++        !self.app.closes_a_window() && self.app.close_requested()
++    }
++
++    fn quit_requested(&self) -> bool {
++        self.done || self.app.quit_requested
++    }
++
++    fn frame_done(&mut self, report: &egui_aros::FrameReport, renderer: &egui_aros::raster::Renderer) {
++        self.frame = report.frame;
++        let drawn = report.raster + report.present;
++        self.frame_costs.push((report.logic + report.ui + report.tessellate + report.textures + drawn, drawn));
++        if let Some(path) = self.step_shot.take() {
++            match write_png(&path, renderer) {
++                Ok(()) => log::info!("test step: wrote {path}"),
++                Err(e) => log::error!("test step: screenshot {path}: {e}"),
++            }
++        }
++        if !self.renderer_logged {
++            self.renderer_logged = true;
++            log::info!("GUI_RENDERER using {}", egui_aros::renderer_name());
++            log_tasks("first frame");
++        }
++        if let Some((path, frames)) = &self.screenshot
++            && report.frame >= *frames
++        {
++            match write_png(path, renderer) {
++                Ok(()) => log::info!("wrote {path}"),
++                Err(e) => log::error!("screenshot {path}: {e}"),
++            }
++            self.done = true;
++        }
++    }
++}
++
++fn run(mut options: Options, choice: launch::RendererChoice) -> u8 {
++    let (request, narrowed) = launch::effective(choice);
++    if let Some(why) = narrowed {
++        log::info!("GUI_RENDERER AUTO uses the CPU: {why}");
++    }
++    // As large as the screen allows, up to 1440x920; --window sets it exactly.
++    let (sw, sh) = egui_aros::screen_size().map_or((1456, 968), |(w, h)| (w as i32, h as i32));
++    let (w, h) = options.window.unwrap_or((1440.min(sw - 16).max(760), 920.min(sh - 48).max(480)));
++    let (w, h) = (w.max(1) as u32, h.max(1) as u32);
++    let ctx = egui::Context::default();
++    let shared_window: services::SharedWindow = Rc::new(RefCell::new(None));
++    let app = new_app(shared_window.clone(), &options, &ctx);
++    log_tasks("app created");
++    let mut host = Host {
++        app,
++        shared_window,
++        ctx: ctx.clone(),
++        screenshot: options.screenshot.clone().map(|p| (p, options.screenshot_frames)),
++        done: false,
++        renderer_logged: false,
++        steps: options.test_steps.drain(..).collect(),
++        frame: 0,
++        step_shot: None,
++        frame_costs: Vec::new(),
++    };
++    let run_options = egui_aros::Options {
++        title: "WordCraft".to_owned(),
++        inner_size: (w, h),
++        min_inner_size: Some((480, 320)),
++        clear_color: [0xf3, 0xf3, 0xf3],
++        idle_poll: Some(IDLE_POLL),
++        renderer: request,
++        ..Default::default()
++    };
++    // A panic below the app (renderer, window) unwinds to here on ABIv11, so the shutdown below
++    // still runs.
++    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_aros::run(run_options, ctx, &mut host)))
++        .unwrap_or_else(|_| Err(egui_aros::Error::Window("the window loop stopped after a panic".into())));
++    if let Some(info) = egui_aros::renderer_info() {
++        log::info!("GUI_RENDERER {}", info.summary());
++    }
++    log::info!("frames: {}", frame_summary(&host.frame_costs));
++    // The services hold the window handle; let go of it with the window.
++    *host.shared_window.borrow_mut() = None;
++    let code = match result {
++        Ok(()) => 0,
++        Err(e) => {
++            log::error!("{e}");
++            if !SHELL.load(std::sync::atomic::Ordering::Relaxed) {
++                startup::show_error("WordCraft", &e.to_string());
++            }
++            20
++        }
++    };
++    if host.screenshot.is_none() {
++        save_prefs(&host.app);
++    }
++    host.app.session.finish_recovery();
++    drop(host);
++    log::info!("shutdown: application state dropped");
++    // AROS's pthread library waits for every thread when the program exits: name the tasks still
++    // there, so a worker that does not end can be found in the log.
++    log_tasks("shutdown");
++    code
++}
++
++/// Logs the program's threads still present (`pthread thread #N` on AROS), at shutdown and, with
++/// WORDCRAFT_LOG_TASKS set, at start-up points too.
++fn log_tasks(when: &str) {
++    if when != "shutdown" && std::env::var_os("WORDCRAFT_LOG_TASKS").is_none() {
++        return;
++    }
++    let threads: Vec<String> = startup::task_names().into_iter().filter(|t| t.starts_with("pthread")).collect();
++    log::info!("{when}: threads: {}", if threads.is_empty() { "none".to_owned() } else { threads.join(", ").replace('\t', ":") });
++}
++
++fn write_png(path: &str, r: &egui_aros::raster::Renderer) -> Result<(), String> {
++    let img = image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.frame.clone()).ok_or("frame size mismatch")?;
++    img.save_with_format(path, image::ImageFormat::Png).map_err(|e| e.to_string())
++}
+diff --git a/apps/wordcraft-aros/src/services.rs b/apps/wordcraft-aros/src/services.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..28d3cb74d2b6f335e08c569f735c22810ee8c717
+--- /dev/null
++++ b/apps/wordcraft-aros/src/services.rs
+@@ -0,0 +1,130 @@
++//! The platform services the editor uses on AROS: ASL file requesters, the system clipboard's
++//! text and pictures, the animation setting and the templates folder. The same contract as the
++//! desktop app's `services` (apps/wordcraft/src/main.rs), without rfd, arboard, craft-print and
++//! the other crates that have no AROS backend; the app hides what a missing service would offer
++//! (printing, rich clipboard formats, default-app registration).
++//!
++//! Paths: the program runs in the -nix path mode; requesters speak DOS names, converted at this
++//! edge (egui_aros::startup).
++
++use std::cell::RefCell;
++use std::rc::Rc;
++
++use egui_aros::WindowHandle;
++use egui_aros::asl::{Select, request};
++use egui_aros::startup::{dos_to_nix, nix_to_dos};
++use wordcraft_ui_egui::Services;
++use wordcraft_ui_egui::paste_picture::ClipboardPicture;
++
++/// An AmigaDOS pattern for the first filter of `purpose` (`#?.(docx|odt)`), or none for "any
++/// file"; the ASL requester matches it without regard to case. asl.library copies the pattern
++/// into a 257-byte gadget without a length check (VectorCraft port), so a longer one shows every
++/// file instead.
++fn pattern(purpose: &str) -> String {
++    let Some((_, exts)) = wordcraft_ui_egui::open_filters(purpose).first() else { return String::new() };
++    if exts.contains(&"*") {
++        return String::new();
++    }
++    let p = format!("#?.({})", exts.join("|"));
++    if p.len() > 255 { String::new() } else { p }
++}
++
++/// The window the requesters are parented to, set once the window is open (the requester runs on
++/// the main thread, modally, while the loop is inside the service call). The handle holds the
++/// window weakly: after it closes, a requester opens without a parent.
++pub type SharedWindow = Rc<RefCell<Option<WindowHandle>>>;
++
++/// The file name part of a path (`a.png` for `/Work/Images/a.png`).
++fn file_part(path: &str) -> &str {
++    path.rsplit('/').next().unwrap_or(path)
++}
++
++/// The drawer part of a -nix path (`/Work/Images` for `/Work/Images/a.png`).
++fn dir_part(path: &str) -> &str {
++    match path.rfind('/') {
++        Some(0) | None => "",
++        Some(i) => &path[..i],
++    }
++}
++
++fn pick(window: &SharedWindow, select: Select, title: &str, dir: &str, file: &str, pat: &str) -> Option<String> {
++    let win = window.borrow().clone()?;
++    let start = if dir.is_empty() { String::new() } else { nix_to_dos(dir).unwrap_or_default() };
++    let dos = request(&win, select, title, &start, file, pat).into_iter().next()?;
++    match dos_to_nix(&dos) {
++        Ok(p) => Some(p),
++        Err(e) => {
++            log::warn!("requester: {dos}: {e}");
++            None
++        }
++    }
++}
++
++/// The picture on the clipboard, in the form the editor's Paste takes (`None`: no picture).
++pub fn clipboard_picture() -> Option<ClipboardPicture> {
++    match egui_aros::clipboard_image() {
++        egui_aros::ClipboardImage::None => None,
++        egui_aros::ClipboardImage::Pixels { width, height, rgba } => {
++            log::info!("clipboard picture: {width}x{height}");
++            Some(ClipboardPicture::Pixels { width: width as usize, height: height as usize, rgba })
++        }
++        egui_aros::ClipboardImage::Unreadable(why) => {
++            log::warn!("clipboard picture: {why}");
++            Some(ClipboardPicture::Unreadable(why))
++        }
++    }
++}
++
++/// The services for this host.
++pub fn aros(window: SharedWindow) -> Services {
++    let last_dir: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
++    let (open_window, save_window) = (window.clone(), window);
++    let (open_dir, save_dir) = (last_dir.clone(), last_dir);
++    Services {
++        pick_open: Some(Box::new(move |purpose: &str| {
++            let title = match purpose {
++                "picture" => "Insert Picture",
++                "font" => "Add Font",
++                "recipients" => "Select Recipients",
++                _ => "Open",
++            };
++            let dir = open_dir.borrow().clone();
++            let path = pick(&open_window, Select::Open, title, &dir, "", &pattern(purpose))?;
++            *open_dir.borrow_mut() = dir_part(&path).to_string();
++            Some(path)
++        })),
++        pick_save: Some(Box::new(move |suggested: &str| {
++            let (dir, file) = (dir_part(suggested).to_string(), file_part(suggested).to_string());
++            let dir = if dir.is_empty() { save_dir.borrow().clone() } else { dir };
++            let path = pick(&save_window, Select::Save, "Save As", &dir, &file, "")?;
++            *save_dir.borrow_mut() = dir_part(&path).to_string();
++            Some(path)
++        })),
++        clipboard_text: Some(Box::new(egui_aros::clipboard_text)),
++        clipboard_picture: Some(Box::new(clipboard_picture)),
++        // Animations are drawn frame by frame by the CPU renderer on most AROS systems; they are
++        // off unless the user turns them on in File › Options.
++        animations_enabled: Some(Box::new(|| Some(false))),
++        templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
++        ..Default::default()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn path_parts() {
++        assert_eq!(dir_part("/Work/Images/a.png"), "/Work/Images");
++        assert_eq!(file_part("/Work/Images/a.png"), "a.png");
++        assert_eq!(dir_part("/RAM"), "");
++        assert_eq!(dir_part("a.docx"), "");
++    }
++
++    #[test]
++    fn patterns_fit_the_requester() {
++        assert!(pattern("document").len() <= 255);
++        assert!(pattern("document").starts_with("#?.(") || pattern("document").is_empty());
++    }
++}

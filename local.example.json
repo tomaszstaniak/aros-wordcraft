@@ -1,8 +1,13 @@
 {
+  "target": "aros-x86_64-abiv11-pc",
   "aros_gcc": "/path/to/abiv11-toolchain/x86_64-aros-gcc",
   "aros_ar": "/path/to/abiv11-toolchain/x86_64-aros-ar",
   "aros_strip": "/path/to/abiv11-toolchain/x86_64-aros-strip",
   "aros_sdk": "/path/to/abiv11-sdk",
   "rust_aros": "/path/to/rust-aros",
-  "toolchain": "your-private-aros-std-toolchain"
+  "rust_aros_commit": "bf47cdfb60084264256399dd47fcf4a5dbd71dab",
+  "aros_src": "/path/to/deadwood2-AROS-checkout",
+  "toolchain": "your-private-aros-std-toolchain",
+  "egui_aros": "/path/to/egui-aros",
+  "egui_upstream_root": "/path/to/egui-aros/upstream"
 }

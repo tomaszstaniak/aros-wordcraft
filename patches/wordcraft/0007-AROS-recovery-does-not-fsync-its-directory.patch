@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 13:42:02 +0100
+Subject: [PATCH] AROS: recovery does not fsync its directory
+
+The recovery store synced its directory through a read-only descriptor after removing files. On AROS the C library's fsync() refuses a descriptor not open for writing (EBADF), so discarding an empty record logged "recovery: cannot remove empty record: Bad file number" and failed. A DOS delete or rename is complete when its packet returns; there is nothing to flush through a directory descriptor.
+---
+ crates/engine/src/recovery/desktop.rs | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/crates/engine/src/recovery/desktop.rs b/crates/engine/src/recovery/desktop.rs
+index c0e12abfd5118b2dacb696d04f1593f7172c1955..696c2e0fd1d685f1f5bdc492357f8b344062d984 100644
+--- a/crates/engine/src/recovery/desktop.rs
++++ b/crates/engine/src/recovery/desktop.rs
+@@ -83,11 +83,14 @@ fn private_file(path: &Path, exclusive: bool) -> io::Result<File> {
+     o.open(path)
+ }
+ fn sync_dir(path: &Path) -> io::Result<()> {
+-    #[cfg(unix)]
++    // AROS: a directory has nothing to flush through a descriptor (a DOS delete or rename is
++    // done when its packet returns), and the C library's fsync() refuses a descriptor not open
++    // for writing with EBADF, so every discard of an empty record failed.
++    #[cfg(all(unix, not(target_os = "aros")))]
+     {
+         File::open(path)?.sync_all()?;
+     }
+-    #[cfg(not(unix))]
++    #[cfg(any(not(unix), target_os = "aros"))]
+     {
+         let _ = path;
+     }

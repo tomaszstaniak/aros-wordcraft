@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:06:55 +0100
+Subject: [PATCH] AROS: FONTS: as the system font folder
+
+The font folder list for systems other than macOS and Windows is Linux's; in the -nix path mode the AROS build runs in, each folder names a volume (usr, run, ...) and DOS would ask for each one. AROS gets FONTS:, as in the VectorCraft port.
+---
+ crates/fonts/src/fontdb/names.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/crates/fonts/src/fontdb/names.rs b/crates/fonts/src/fontdb/names.rs
+index 0b01041d6699c9be6748de72f6a6490c3052ae71..3567affb568d9adc5fee52577c5d1292f51ba857 100644
+--- a/crates/fonts/src/fontdb/names.rs
++++ b/crates/fonts/src/fontdb/names.rs
+@@ -234,6 +234,10 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
+         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+             dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
+         }
++    } else if cfg!(target_os = "aros") {
++        // FONTS: in the -nix path mode the program runs in. The Unix folders below would name
++        // volumes that do not exist (usr, run…), each a "Please insert volume" request.
++        dirs.push("/FONTS".into());
+     } else {
+         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));
+         if let Some(h) = &home {

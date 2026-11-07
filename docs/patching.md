@@ -1,6 +1,6 @@
 ---
 type: guide
-updated: 2026-10-17
+updated: 2026-11-07
 ---
 
 # Source and patch workflow
@@ -10,7 +10,7 @@ updated: 2026-10-17
 `upstreams.json` maps `wordcraft` (the build source) to its URL and full commit. `patches/wordcraft/series`
 lists the patches in order. The example manifest is illustrative only.
 
-`scripts/wc.py` implements the procedure below: `fetch` (clone, or verify origin,
+`scripts/craft.py` implements the procedure below: `fetch` (clone, or verify origin,
 pin and clean state), `materialize` (new work copy only), `export` (work-copy
 commits since the pin to numbered patches and `series`; refuses uncommitted
 changes) and `verify` (rebuild the series in a new temporary directory whose path

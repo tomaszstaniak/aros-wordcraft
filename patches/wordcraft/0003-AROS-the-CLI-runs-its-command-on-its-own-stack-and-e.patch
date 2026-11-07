@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:07:18 +0100
+Subject: [PATCH] AROS: the CLI runs its command on its own stack and ends
+ rayon's pool
+
+An AROS program runs on the stack of whatever starts it (40,960 bytes in an AROS One Shell); layout and rendering overrun that. The command runs on a thread with an 8 MiB stack. AROS's pthread library joins every thread at exit, and rayon's idle global workers never end by themselves: the patched rayon-core ends them first.
+---
+ Cargo.lock                     |  1 +
+ apps/wordcraft-cli/Cargo.toml  |  5 +++++
+ apps/wordcraft-cli/src/main.rs | 25 ++++++++++++++++++++++++-
+ 3 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index a2f9be3624131d22cfd05bf125fa4ac8bb995033..b027d348b96a4d47837ada9815ff00a45b01cace 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6835,6 +6835,7 @@ dependencies = [
+ name = "wordcraft-cli"
+ version = "0.16.0"
+ dependencies = [
++ "rayon-core",
+  "serde_json",
+  "sys-locale",
+  "wordcraft-doc",
+diff --git a/apps/wordcraft-cli/Cargo.toml b/apps/wordcraft-cli/Cargo.toml
+index 7f9b25dfa7aaaabf46ddd11922ab8dd327f8109e..94226e08884dd8da827f453a1e72d10aaffd2add 100644
+--- a/apps/wordcraft-cli/Cargo.toml
++++ b/apps/wordcraft-cli/Cargo.toml
+@@ -21,3 +21,8 @@ wordcraft-mcp = { workspace = true }
+ wordcraft-zotero = { workspace = true }
+ serde_json = { workspace = true }
+ sys-locale = "0.3"
++
++# The patched rayon-core (see the AROS port's crate patches) can end the global pool's threads,
++# which AROS's pthread library otherwise waits for forever when the program exits.
++[target.'cfg(target_os = "aros")'.dependencies]
++rayon-core = "1.13"
+diff --git a/apps/wordcraft-cli/src/main.rs b/apps/wordcraft-cli/src/main.rs
+index 669da7c377a746308e38f2c0819a98d5dfb54a20..9371949daf44d6d89c43b36a8465bb636d2e63ee 100644
+--- a/apps/wordcraft-cli/src/main.rs
++++ b/apps/wordcraft-cli/src/main.rs
+@@ -761,6 +761,10 @@ fn parity_markdown(p: &Value) -> String {
+     s
+ }
+ 
++/// The command thread's stack on AROS (see `main`).
++#[cfg(target_os = "aros")]
++const AROS_STACK: usize = 8 << 20;
++
+ fn main() -> ExitCode {
+     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+     // Language packs installed in the suite's font store are used; `proof.installPack` installs
+@@ -769,7 +773,26 @@ fn main() -> ExitCode {
+     if let Some(source) = wordcraft_engine::packs::index_override() {
+         eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+     }
+-    match run(&args) {
++    #[cfg(not(target_os = "aros"))]
++    let result = run(&args);
++    // An AROS program runs on the stack of whatever starts it: 40,960 bytes in an AROS One
++    // Shell, and whatever an MCP client's process creation gives. Layout and rendering overrun
++    // that, and the overrun takes the system down with it. The command runs on a thread with its
++    // own stack, so no caller has to know the size.
++    #[cfg(target_os = "aros")]
++    let result = std::thread::Builder::new()
++        .name("wordcraft-cli".into())
++        .stack_size(AROS_STACK)
++        .spawn(move || run(&args))
++        .map_err(|e| Failure::Error(e.to_string()))
++        .and_then(|worker| worker.join().map_err(|_| Failure::Error("the command panicked".into())))
++        .and_then(|r| r);
++    // AROS's pthread library joins every thread in its exit handler; rayon's idle global
++    // workers (vello_cpu renders on them) never end by themselves, so a command that used them
++    // could not exit.
++    #[cfg(target_os = "aros")]
++    rayon_core::terminate_global_thread_pool();
++    match result {
+         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
+         Err(Failure::Error(e)) => {
+             eprintln!("wordcraft-cli: {e}");

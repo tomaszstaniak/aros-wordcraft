@@ -6,9 +6,11 @@ followed by a second PNG for the selected state (AROS
 workbench/libs/icon/diskobjPNGio.c). Tags used here:
   0x8000100f  icon type (2 = drawer, 3 = tool)
   0x80001009  stack size in bytes (a tool's stack when started from Workbench)
+  0x8000100b  one ToolType, as a NUL-terminated string (repeated per ToolType)
 
 Usage: icons.py SOURCE.png DEST_DIR NAME STACK
 writes DEST_DIR/NAME/NAME.info (tool) and DEST_DIR/NAME.info (drawer).
+scripts/package.py calls icon() directly to add the tool's ToolTypes.
 """
 import struct
 import sys
@@ -79,9 +81,16 @@ def selected(rows):
     return out
 
 
-def icon(width, height, rows, kind, stack):
+def icon(width, height, rows, kind, stack, tooltypes=()):
     tags = [(0x8000100F, kind)] + ([(0x80001009, stack)] if kind == ICON_TOOL else [])
-    return encode(width, height, rows, tags) + encode(width, height, selected(rows), tags)
+    def state(pixels):
+        data = encode(width, height, pixels, tags)
+        pos = data.index(b"icOn") - 4
+        length = struct.unpack(">I", data[pos:pos+4])[0]
+        meta = data[pos+8:pos+8+length]
+        meta += b"".join(struct.pack(">I", 0x8000100B) + t.encode("ascii") + b"\0" for t in tooltypes)
+        return data[:pos] + chunk(b"icOn", meta) + data[pos+12+length:]
+    return state(rows) + state(selected(rows))
 
 
 def main():

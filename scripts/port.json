@@ -1,0 +1,20 @@
+{
+  "comment": "The app this Craft port builds; scripts/craft.py and craftconfig.py are shared by the Craft ports and read only this file for app-specific names.",
+  "id": "wordcraft",
+  "name": "WordCraft",
+  "env_prefix": "WORDCRAFT",
+  "packages": {
+    "wordcraft-aros": "WordCraft",
+    "wordcraft-cli": "wordcraft-cli"
+  },
+  "tools": {
+    "clip-probe": [
+      "../egui-aros/examples/clip-probe",
+      "clip-probe"
+    ],
+    "stack-probe": [
+      "../egui-aros/examples/stack-probe",
+      "stack-probe"
+    ]
+  }
+}

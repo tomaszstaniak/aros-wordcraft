@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tomaszstaniak <68373859+tomaszstaniak@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:06:46 +0100
+Subject: [PATCH] AROS: build without the self-updater
+
+Releases for AROS come through the AROS package catalogue, and craft-update's HTTPS stack (hyper, rustls, aws-lc-sys with its C/CMake build) has no AROS build. The updater is left out on target_os = "aros" the way the web build leaves it out; Check for Updates says where AROS updates come from.
+---
+ crates/ui-egui/Cargo.toml        |  4 +++
+ crates/ui-egui/src/lib.rs        |  2 +-
+ crates/ui-egui/src/updates_ui.rs | 49 ++++++++++++++++++--------------
+ 3 files changed, 32 insertions(+), 23 deletions(-)
+
+diff --git a/crates/ui-egui/Cargo.toml b/crates/ui-egui/Cargo.toml
+index cf513e8fa7ec0e4b3aa5219a62cc161bec37944c..4ad674d30cbe3f32a5c780891dc3218a7fffe96c 100644
+--- a/crates/ui-egui/Cargo.toml
++++ b/crates/ui-egui/Cargo.toml
+@@ -45,6 +45,10 @@ zbus = "=5.19.0"
+ # Comment times in the user's own time zone (`local_time.rs`); the web app asks the browser.
+ [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
++
++# AROS: no self-update. Releases come through the AROS package catalogue, and the updater's
++# HTTPS stack (hyper, rustls, aws-lc-sys with its C/CMake build) has no AROS build.
++[target.'cfg(not(any(target_arch = "wasm32", target_os = "aros")))'.dependencies]
+ craft-update = { workspace = true }
+ 
+ [target.'cfg(target_arch = "wasm32")'.dependencies]
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 3c11561440dc6f26f6d45a19c84fb238827b6304..d8e37d8884f618da4b13a45d736aa11ec2b45857 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -7,7 +7,7 @@
+ 
+ /// WordCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+ /// prompt shows both, and an AppImage's menu entry gets the icon.
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+     icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.wordcraft.png")),
+     accent: Some([0x3f, 0x5f, 0xe0]),
+diff --git a/crates/ui-egui/src/updates_ui.rs b/crates/ui-egui/src/updates_ui.rs
+index ebd03406f6ba7f08ad1eaa447288e7671a1193e7..45ae4065a711a257fe5de03b87af07b4c59e65bd 100644
+--- a/crates/ui-egui/src/updates_ui.rs
++++ b/crates/ui-egui/src/updates_ui.rs
+@@ -2,44 +2,44 @@
+ 
+ use crate::WordApp;
+ 
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+ use craft_update::dialog::{CheckResultDialog, CheckResultResponse};
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+ use craft_update::updater::{Action, Status, Updater};
+ 
+ pub(crate) struct Runtime {
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     updater: Updater,
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     result_dialog: CheckResultDialog,
+     /// The desktop app turns the check at start on; tests and the web build leave it off.
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     startup_check: bool,
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     check_requested: bool,
+     /// The context of the last frame, to wake the UI when a check is queued from a menu callback.
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     repaint: Option<egui::Context>,
+     pub(crate) manual_window_open: bool,
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+     pub(crate) status_message: Option<String>,
+ }
+ 
+ impl Default for Runtime {
+     fn default() -> Self {
+         Self {
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+             updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+             result_dialog: CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+             startup_check: false,
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+             check_requested: false,
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+             repaint: None,
+             manual_window_open: false,
+-            #[cfg(target_arch = "wasm32")]
++            #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+             status_message: None,
+         }
+     }
+@@ -47,14 +47,14 @@ impl Default for Runtime {
+ 
+ impl WordApp {
+     /// Whether the app asks for a newer release when it starts (off until the desktop app turns it on).
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     pub fn set_startup_update_check(&mut self, on: bool) {
+         self.updates_rt.startup_check = on;
+     }
+ }
+ 
+ pub(crate) fn check(app: &mut WordApp) {
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     {
+         app.updates_rt.check_requested = true;
+         app.updates_rt.manual_window_open = true;
+@@ -62,15 +62,20 @@ pub(crate) fn check(app: &mut WordApp) {
+             ctx.request_repaint();
+         }
+     }
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+     {
+         app.updates_rt.manual_window_open = true;
+-        app.updates_rt.status_message = Some(tl!("Update check is not supported in the web browser.").to_string());
++        #[cfg(target_arch = "wasm32")]
++        let message = tl!("Update check is not supported in the web browser.");
++        // AROS releases come through the AROS package catalogue (apkg), not this check.
++        #[cfg(target_os = "aros")]
++        let message = tl!("WordCraft for AROS is updated through the AROS package catalogue.");
++        app.updates_rt.status_message = Some(message.to_string());
+     }
+ }
+ 
+ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     {
+         let rt = &mut app.updates_rt;
+         rt.repaint = Some(ctx.clone());
+@@ -81,12 +86,12 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
+         }
+         rt.updater.tick(ctx);
+     }
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+     let _ = (app, ctx);
+ }
+ 
+ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "aros")))]
+     {
+         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+         let clean = !(app.session.dirty || app.save_unconfirmed() || app.printing.busy() || crate::panes::has_comment_drafts(app));
+@@ -113,7 +118,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
+         }
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", target_os = "aros"))]
+     if app.updates_rt.manual_window_open {
+         let mut open = true;
+         egui::Window::new(tl!("Check for Updates"))
