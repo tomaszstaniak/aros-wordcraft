@@ -1,5 +1,6 @@
 id              = "wordcraft"
 version         = "0.16.0"
+revision        = 1
 summary         = "Word processor for DOCX, ODT, RTF and more with PDF export"
 category        = "office/text"
 license         = "MIT OR Apache-2.0"
@@ -18,19 +19,21 @@ post_install_notes = [
   "Clipboard text in the system character set or UTF-8; a picture on the clipboard is pasted with Ctrl+V.",
 ]
 
-# System libraries the programs open; gl.library only for GUI_RENDERER AUTO or GPU,
-# codesets.library only when it is there.
-[[requires_system]]
-type = "library"
-id   = "crt.library"
+# System libraries the programs open: stdc, posixc and stdcio are the mainline C runtime the programs open at start;
+# the others are opened for the window, pictures and requesters. gl.library only for
+# GUI_RENDERER AUTO or GPU, codesets.library only when it is there.
 
 [[requires_system]]
 type = "library"
-id   = "stdlib.library"
+id   = "stdc.library"
 
 [[requires_system]]
 type = "library"
-id   = "m.library"
+id   = "posixc.library"
+
+[[requires_system]]
+type = "library"
+id   = "stdcio.library"
 
 [[requires_system]]
 type = "library"
@@ -50,8 +53,8 @@ id   = "datatypes.library"
 
 [source]
 repository = "https://github.com/tomaszstaniak/aros-wordcraft"
-revision   = "v0.16.0"
-archive    = "WordCraft-0.16.0-source.zip"
+revision   = "v0.16.0-r1"
+archive    = "WordCraft-0.16.0-r1-source.zip"
 built_with = "Raspberry Pi AArch64 ABIv1 (nightly 2026-11-05 SDK), Clang 20.1, Rust nightly 1.100 (rust-aros), egui 0.37 through egui-aros"
 
 [launch]

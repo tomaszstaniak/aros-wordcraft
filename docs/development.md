@@ -123,14 +123,19 @@ The mainline x86_64 target needs no `aros_src`.
    ```
 
    `package.py` finds each target's local file by its `target`. It writes
-   `dist/WordCraft-<release>-<target>.zip` and `dist/WordCraft-<release>-source.zip`
-   (`release` in `release.json`) and adds them to `dist/SHA256SUMS`. Binary archives go
+   `dist/WordCraft-<release>[-rN]-<target>.zip` and `dist/WordCraft-<release>[-rN]-source.zip`
+   (`release` and `revision` in `release.json`; `-rN` is a packaging revision of the same
+   programs, arospkg's `revision`) and adds them to `dist/SHA256SUMS`. Binary archives go
    through `apkg-pack check`, `build` and `check` with the target's catalogue description from
    `packaging/catalogue/`; it adds `.arospkg/manifest.toml` (read by `apkg-pack submit`) and
    `WordCraft/application.json` (read by `apkg run`), and every other member must come out
    byte for byte as staged. It refuses an existing or listed file, a dirty repository, a
    build from a dirty work copy, a profile other than the target's in `release.json`, binaries
-   that differ from the manifest and undefined symbols. The programs are stripped with
+   that differ from the manifest, undefined symbols, and a catalogue description whose
+   `requires_system` does not match the programs: the C runtime they open at start (crt,
+   stdlib and m on ABIv11; stdc, posixc and stdcio on mainline ABIv1) must be required, and
+   nothing may be required that no program names. `python3 -m unittest
+   tests/package/test_requirements.py` checks the three descriptions and that rule. The programs are stripped with
    `strip --strip-unneeded --remove-section .comment` only: a full strip removes relocations
    AROS applies when it loads a program. The program icon is generated from WordCraft's
    64x64 application icon with the stack and ToolTypes from `release.json`.

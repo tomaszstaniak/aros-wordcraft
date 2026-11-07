@@ -4,13 +4,13 @@ An AROS port of [WordCraft](https://github.com/storytold/wordcraft), a word proc
 
 ## Download and run
 
-[Download 0.16.0](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.16.0) for one of these systems, or install `wordcraft` with arospkg:
+[Download 0.16.0 (packaging revision 1)](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.16.0-r1) for one of these systems, or install `wordcraft` with arospkg:
 
 | Package | System |
 |---|---|
-| `WordCraft-0.16.0-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 (AROS One 1.3) |
-| `WordCraft-0.16.0-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-05) |
-| `WordCraft-0.16.0-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05) |
+| `WordCraft-0.16.0-r1-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 (AROS One 1.3) |
+| `WordCraft-0.16.0-r1-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-05) |
+| `WordCraft-0.16.0-r1-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05) |
 
 Each package runs only on the system it was built for and includes WordCraft and `wordcraft-cli`. Unpack the archive anywhere writable and double-click the WordCraft icon; from a Shell, run `WordCraft [file]`. The program takes the stack it needs itself. `ReadMe.txt` in the drawer describes installation, the command line, the clipboard and the interface renderer.
 

@@ -6,12 +6,18 @@ The AROS port of WordCraft 0.16.0, a word processor that reads and writes DOCX, 
 
 | File | System |
 |---|---|
-| `WordCraft-0.16.0-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 (AROS One 1.3) |
-| `WordCraft-0.16.0-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-05) |
-| `WordCraft-0.16.0-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05); not for hosted Macaros |
-| `WordCraft-0.16.0-source.zip` | Port sources, patches, pinned inputs and build recipe |
+| `WordCraft-0.16.0-r1-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 (AROS One 1.3) |
+| `WordCraft-0.16.0-r1-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-05) |
+| `WordCraft-0.16.0-r1-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05); not for hosted Macaros |
+| `WordCraft-0.16.0-r1-source.zip` | Port sources, patches, pinned inputs and build recipe |
 
-Each package runs only on the system it was built for. `SHA256SUMS` lists the checksums. The packages can also be installed with arospkg (`apkg install wordcraft`) once the catalogue lists them.
+Each package runs only on the system it was built for. `SHA256SUMS` lists the checksums. The packages can also be installed with arospkg: `apkg install wordcraft` (the catalogue shows them as `0.16.0-aros1`).
+
+## Packaging revision 1 (2026-11-07)
+
+The first 0.16.0 packages (release `v0.16.0`) could not be installed with arospkg on mainline AROS and on the Raspberry Pi: their package descriptions required `crt.library`, `stdlib.library` and `m.library`, the C runtime of ABIv11, which mainline AROS does not have. apkg checks the requirements before it downloads anything, so it refused the package with "this system does not provide what the package needs". Unpacked by hand, those packages run; the programs themselves were right.
+
+Revision 1 corrects the descriptions: the mainline x86_64 and Raspberry Pi packages now require `stdc.library`, `posixc.library` and `stdcio.library`, the libraries those programs open at start. The ABIv11 description is unchanged. The programs in all three packages are byte for byte the ones of `v0.16.0` (`BUILD.txt` in each drawer lists their hashes). If you unpacked a `v0.16.0` package by hand, there is nothing to change. The packaging now refuses a description whose requirements do not match the programs.
 
 ## What is in the port
 

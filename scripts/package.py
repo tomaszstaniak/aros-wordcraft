@@ -4,11 +4,13 @@
     package.py binary BUILD_OUTPUT [--dist DIR]
     package.py source BUILD_OUTPUT [BUILD_OUTPUT ...] [--dist DIR]
 
-`binary` writes <App>-<release>-<target>.zip for the build's target (read from its manifest).
-`source` writes <App>-<release>-source.zip: this repository at HEAD (pins, patches, scripts,
-recipe) plus the pinned inputs every named build used. Both append to DIR/SHA256SUMS (default
-DIR: dist/ of this repository, flat; the target is in the file name). The app's names come from
-scripts/port.json, as in craft.py.
+`binary` writes <App>-<release>[-rN]-<target>.zip for the build's target (read from its
+manifest). `source` writes <App>-<release>[-rN]-source.zip: this repository at HEAD (pins,
+patches, scripts, recipe) plus the pinned inputs every named build used. Both append to
+DIR/SHA256SUMS (default DIR: dist/ of this repository, flat; the target is in the file name).
+The app's names come from scripts/port.json, as in craft.py. `-rN` is the packaging revision
+(`revision` in release.json, arospkg's revision of the same program version): a correction of
+the packages that keeps the programs as they are.
 
 The configuration of a build's target is the local file (<PREFIX>_LOCAL, local.json,
 local.*.json) whose `target` is that target; local.json without a `target` is the default
@@ -17,8 +19,11 @@ target, as in craftconfig. Exactly one must match.
 Refuses to replace a file that is already there or listed in SHA256SUMS, a build that is not
 from a clean, committed work copy or made under another release name, a build with another
 LTO/panic/feature profile than the target's in release.json, binaries whose bytes differ from
-the build manifest or that have undefined symbols, and a repository whose patch series is not
-the one the build used.
+the build manifest or that have undefined symbols, a repository whose patch series is not
+the one the build used, and a catalogue description whose system requirements do not match
+the programs: every C runtime library the programs open at start (ABIv11: crt, stdlib, m;
+mainline ABIv1: stdc, posixc, stdcio) must be required, and nothing may be required that no
+program names.
 
 The binary archive unpacks to one drawer and its icon (WordCraft shown):
 
@@ -270,6 +275,8 @@ def build_txt(release, spec, manifest, repo_head, packaged):
              f"Target:        {manifest['target']}",
              f"System:        {spec['system']}",
              f"Version:       {release['upstream_version']}",
+             *([f"Package:       revision {release['revision']} of the {release['release']} packages (the programs are unchanged)"]
+               if release.get("revision") else []),
              f"Build id:      {manifest['build_id']}",
              f"Built:         {manifest['date']}",
              "",
@@ -342,9 +349,46 @@ CATALOGUE = {"aros-x86_64-abiv11-pc": ("x86_64", "v11"), "aros-x86_64-abiv1-pc":
 # Written by apkg-pack: the description embedded for `apkg-pack submit`, and the launch record
 # for `apkg run` in an unpacked drawer.
 PACK_ADDED = {".arospkg/manifest.toml", f"{APP}/application.json"}
+# The C runtime libraries an AROS program opens at start when it is linked against the C library
+# of its ABI. They differ between the ABIs and none exists on the other system, so a description
+# that names the wrong set makes apkg refuse the package on the system it was built for.
+C_RUNTIME = {"crt.library", "stdlib.library", "m.library",         # ABIv11 (AROS One)
+             "stdc.library", "posixc.library", "stdcio.library"}   # mainline ABIv1
+LIBRARY_NAME = re.compile(rb"[A-Za-z0-9_.-]+\.library")
 
 
-def apkg_pack_zip(path, files, date, target, release):
+def library_names(programs):
+    """Every library name that appears in the programs' bytes (the auto-open tables and the
+    names the code opens itself)."""
+    return {m.decode() for data in programs.values() for m in LIBRARY_NAME.findall(data)}
+
+
+def check_requirements(meta, programs):
+    """The catalogue description must require every C runtime library the programs name and
+    nothing that no program names. Libraries a program opens only when they are there (gl,
+    codesets) may stay unlisted; the C runtime may not."""
+    required = {r["id"] for r in meta.get("requires_system", []) if r.get("type") == "library"}
+    named = library_names(programs)
+    unlisted = sorted((named & C_RUNTIME) - required)
+    if unlisted:
+        raise Failure(f"the programs open {', '.join(unlisted)} at start, but the catalogue description "
+                      f"does not require {'it' if len(unlisted) == 1 else 'them'}")
+    foreign = sorted(required - named)
+    if foreign:
+        raise Failure(f"the catalogue description requires {', '.join(foreign)}, which no program names: "
+                      "a description copied from another target?")
+
+
+def package_name(release, suffix):
+    """<App>-<release>[-rN]-<suffix>: the packaging revision, when there is one, sits in every
+    archive name so that a corrected package never has the name of the one it corrects."""
+    revision = release.get("revision")
+    if revision is not None and (not isinstance(revision, int) or revision < 1):
+        raise Failure(f"release.json: revision {revision!r} is not a positive integer")
+    return f"{release['name']}-{release['release']}{f'-r{revision}' if revision else ''}-{suffix}"
+
+
+def apkg_pack_zip(path, files, date, target, release, programs):
     """Write the archive through arospkg's apkg-pack: it checks the catalogue description against
     the drawer, adds the description and the launch record, and checks the archive it wrote.
     Every other member must come out byte for byte as staged."""
@@ -358,6 +402,14 @@ def apkg_pack_zip(path, files, date, target, release):
     if (meta["version"], meta["arch"], meta["abi"]) != (release["release"], arch, abi):
         raise Failure(f"{desc_path.name}: version/arch/abi {meta['version']}/{meta['arch']}/{meta['abi']} "
                       f"is not {release['release']}/{arch}/{abi}")
+    if meta.get("revision") != release.get("revision"):
+        raise Failure(f"{desc_path.name}: revision {meta.get('revision')!r} is not release.json's {release.get('revision')!r}")
+    if meta.get("source", {}).get("archive") != release["source_archive"]:
+        raise Failure(f"{desc_path.name}: source.archive {meta.get('source', {}).get('archive')!r} is not {release['source_archive']!r}")
+    try:
+        check_requirements(meta, programs)
+    except Failure as e:
+        raise Failure(f"{desc_path.name}: {e}")
     drawer = release["drawer"]
     epoch = str(calendar.timegm((*date, 0, 0, 0)))
     partial = path.with_name(path.name + ".partial")
@@ -412,7 +464,7 @@ def cmd_binary(a, release):
     cfg = config_for(target)
     repo_head = head_clean()
     dist = Dist(a.dist)
-    name = f"{release['name']}-{release['release']}-{target}.zip"
+    name = package_name(release, f"{target}.zip")
     dist.claim(name)
     date = time.gmtime(int(git("log", "-1", "--format=%ct").decode().strip()))[:6]
     drawer = release["drawer"]
@@ -441,7 +493,7 @@ def cmd_binary(a, release):
     long_names = sorted({part for n in files for part in n.split("/") if len(part) > NAME_LIMIT})
     if long_names:
         raise Failure(f"archive names longer than {NAME_LIMIT} characters: {long_names}")
-    for n, data in apkg_pack_zip(a.dist / name, files, date, target, release).items():
+    for n, data in apkg_pack_zip(a.dist / name, files, date, target, release, packaged).items():
         files[n] = (data, 0o100644)
     digest = dist.record(name)
     record = {"archive": name, "sha256": digest, "bytes": (a.dist / name).stat().st_size, "target": target,
@@ -493,6 +545,8 @@ def cmd_source(a, release):
     repo_head = head_clean()
     dist = Dist(a.dist)
     name = release["source_archive"]
+    if name != package_name(release, "source.zip"):
+        raise Failure(f"release.json: source_archive {name!r} should be {package_name(release, 'source.zip')!r}")
     dist.claim(name)
     prefix = name.removesuffix(".zip") + "/"
     path = a.dist / name

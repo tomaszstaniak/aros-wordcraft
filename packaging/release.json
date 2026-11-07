@@ -2,6 +2,7 @@
   "name": "WordCraft",
   "version": "0.16.0",
   "release": "0.16.0",
+  "revision": 1,
   "upstream_version": "0.16.0 (tag v0.16.0, 2026-11-06)",
   "drawer": "WordCraft",
   "stack": 16777216,
@@ -9,7 +10,7 @@
     "GUI_RENDERER=CPU"
   ],
   "icon_source": "work:assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png",
-  "source_archive": "WordCraft-0.16.0-source.zip",
+  "source_archive": "WordCraft-0.16.0-r1-source.zip",
   "source_archive_exclude": [
     "AGENTS.md",
     "CLAUDE.md"
