@@ -12,35 +12,38 @@ An AROS program runs on the stack of whatever starts it (40,960 bytes in an AROS
  3 files changed, 30 insertions(+), 1 deletion(-)
 
 diff --git a/Cargo.lock b/Cargo.lock
-index a2f9be3624131d22cfd05bf125fa4ac8bb995033..b027d348b96a4d47837ada9815ff00a45b01cace 100644
+index 653ae11b75802803764d13389a64238db7e93bd7..cbf6c9d24445b6ab292b493b359ea9441bb5352a 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -6835,6 +6835,7 @@ dependencies = [
- name = "wordcraft-cli"
- version = "0.16.0"
+@@ -6850,6 +6850,7 @@ name = "wordcraft-cli"
+ version = "0.18.1"
  dependencies = [
+  "image",
 + "rayon-core",
   "serde_json",
   "sys-locale",
   "wordcraft-doc",
 diff --git a/apps/wordcraft-cli/Cargo.toml b/apps/wordcraft-cli/Cargo.toml
-index 7f9b25dfa7aaaabf46ddd11922ab8dd327f8109e..94226e08884dd8da827f453a1e72d10aaffd2add 100644
+index da51fba676303a517ffb0dbcb56751b7b339a58b..041f455386fd8bf3d0050b448542ede10554ca7e 100644
 --- a/apps/wordcraft-cli/Cargo.toml
 +++ b/apps/wordcraft-cli/Cargo.toml
-@@ -21,3 +21,8 @@ wordcraft-mcp = { workspace = true }
- wordcraft-zotero = { workspace = true }
+@@ -22,6 +22,11 @@ wordcraft-zotero = { workspace = true }
  serde_json = { workspace = true }
  sys-locale = "0.3"
-+
+ 
 +# The patched rayon-core (see the AROS port's crate patches) can end the global pool's threads,
 +# which AROS's pthread library otherwise waits for forever when the program exits.
 +[target.'cfg(target_os = "aros")'.dependencies]
 +rayon-core = "1.13"
++
+ [dev-dependencies]
+ wordcraft-fonts = { workspace = true }
+ image = { workspace = true }
 diff --git a/apps/wordcraft-cli/src/main.rs b/apps/wordcraft-cli/src/main.rs
-index 669da7c377a746308e38f2c0819a98d5dfb54a20..9371949daf44d6d89c43b36a8465bb636d2e63ee 100644
+index a7c38c628ce121d8fc60fdfb4d4f5f09a7e421f4..fbe5b8144d4d28853c8dd0731ad25d4253edfeaf 100644
 --- a/apps/wordcraft-cli/src/main.rs
 +++ b/apps/wordcraft-cli/src/main.rs
-@@ -761,6 +761,10 @@ fn parity_markdown(p: &Value) -> String {
+@@ -911,6 +911,10 @@ fn parity_markdown(p: &Value) -> String {
      s
  }
  
@@ -51,7 +54,7 @@ index 669da7c377a746308e38f2c0819a98d5dfb54a20..9371949daf44d6d89c43b36a8465bb63
  fn main() -> ExitCode {
      let args: Vec<OsString> = std::env::args_os().skip(1).collect();
      // Language packs installed in the suite's font store are used; `proof.installPack` installs
-@@ -769,7 +773,26 @@ fn main() -> ExitCode {
+@@ -919,7 +923,26 @@ fn main() -> ExitCode {
      if let Some(source) = wordcraft_engine::packs::index_override() {
          eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
      }

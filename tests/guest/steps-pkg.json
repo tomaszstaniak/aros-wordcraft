@@ -1,0 +1,10 @@
+[
+  {"frame": 8, "run": "text.insert", "params": {"text": "Typed by the test. "}},
+  {"frame": 10, "run": "text.insert", "params": {"text": "A second sentence."}},
+  {"frame": 12, "run": "file.save", "params": {"path": "/RAM/t/pkg-saved.docx"}},
+  {"frame": 14, "run": "edit.undo", "params": {}},
+  {"frame": 16, "run": "edit.redo", "params": {}},
+  {"frame": 18, "run": "file.save", "params": {}},
+  {"frame": 22, "screenshot": "/RAM/t/pkg-a.png"},
+  {"frame": 26, "quit": true}
+]

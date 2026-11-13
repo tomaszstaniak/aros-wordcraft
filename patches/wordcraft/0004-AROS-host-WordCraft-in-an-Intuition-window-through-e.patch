@@ -6,9 +6,9 @@ Subject: [PATCH] AROS host: WordCraft in an Intuition window through egui-aros
 apps/wordcraft-aros runs the egui interface with egui-aros: winit and egui-winit for the window and input, the CPU renderer or OpenGL chosen at run time (--gui-renderer, ToolType GUI_RENDERER, the GUI_RENDERER variable; AUTO by default, which closes a software rasterizer's context and draws with the CPU), ASL requesters, and the system clipboard for text (system character set, UTF-8 under CSET 106) and pictures (datatypes; Paste inserts them through the existing clipboard_picture service). It follows the desktop app's start-up: preferences, user fonts and dictionary, recovery, the Start screen, document names from the Shell or Workbench resolved by DOS. Settings, the log and recovery data live in WordCraftData beside the program (WORDCRAFT_PROFILE_DIR). The program runs in the -nix path mode; requesters' DOS names are converted at the edge. The Cargo.lock entries for egui-aros come from the build (scripts/craft.py), as for the other Craft ports.
 ---
  apps/wordcraft-aros/Cargo.toml      |  41 +++
- apps/wordcraft-aros/src/main.rs     | 534 ++++++++++++++++++++++++++++
+ apps/wordcraft-aros/src/main.rs     | 546 ++++++++++++++++++++++++++++
  apps/wordcraft-aros/src/services.rs | 130 +++++++
- 3 files changed, 705 insertions(+)
+ 3 files changed, 717 insertions(+)
  create mode 100644 apps/wordcraft-aros/Cargo.toml
  create mode 100644 apps/wordcraft-aros/src/main.rs
  create mode 100644 apps/wordcraft-aros/src/services.rs
@@ -62,10 +62,10 @@ index 0000000000000000000000000000000000000000..521ecfd71d46d083dddae628faa1c52c
 +rayon-core = "1.13"
 diff --git a/apps/wordcraft-aros/src/main.rs b/apps/wordcraft-aros/src/main.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..b36e5e51d8f133eae444edf38fc9b96fe09570bf
+index 0000000000000000000000000000000000000000..72583dc7ec9e52f4065083b5489422bd72f76536
 --- /dev/null
 +++ b/apps/wordcraft-aros/src/main.rs
-@@ -0,0 +1,534 @@
+@@ -0,0 +1,546 @@
 +//! WordCraft on AROS.
 +//!
 +//! The egui interface (`wordcraft-ui-egui`) runs in an Intuition window through egui-aros: winit
@@ -275,17 +275,25 @@ index 0000000000000000000000000000000000000000..b36e5e51d8f133eae444edf38fc9b96f
 +}
 +
 +fn save_prefs(app: &WordApp) {
++    if let Err(e) = try_save_prefs(app) {
++        log::warn!("preferences: {e}");
++    }
++}
++
++/// Saves the preferences and says why when it could not, as the desktop app's hook does.
++/// `Ok(false)`: nothing was written because preferences are switched off or there is no
++/// settings folder.
++fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
 +    if !prefs_enabled() {
-+        return;
++        return Ok(false);
 +    }
-+    if let Some(p) = prefs_path() {
-+        if let Some(dir) = p.parent() {
-+            let _ = std::fs::create_dir_all(dir);
-+        }
-+        if let Ok(bytes) = serde_json::to_vec_pretty(&app.prefs()) {
-+            let _ = std::fs::write(&p, bytes);
-+        }
++    let Some(p) = prefs_path() else { return Ok(false) };
++    if let Some(dir) = p.parent() {
++        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 +    }
++    let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
++    std::fs::write(&p, bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
++    Ok(true)
 +}
 +
 +fn load_user_dictionary(app: &mut WordApp) {
@@ -375,7 +383,11 @@ index 0000000000000000000000000000000000000000..b36e5e51d8f133eae444edf38fc9b96f
 +    let doc = if options.sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
 +    let mut session = Session::new(doc);
 +    session.system_region = region;
-+    let mut app = WordApp::new(session, services::aros(shared_window));
++    let mut services = services::aros(shared_window);
++    // A change that should survive a crash (a document taken off the recent list) is written at
++    // once, not only at exit.
++    services.save_prefs = Some(Box::new(try_save_prefs));
++    let mut app = WordApp::new(session, services);
 +    load_prefs(&mut app);
 +    load_user_dictionary(&mut app);
 +    // Language packs: those installed in the suite's font store are used; downloading them over
@@ -401,7 +413,7 @@ index 0000000000000000000000000000000000000000..b36e5e51d8f133eae444edf38fc9b96f
 +        app.start_screen();
 +    }
 +    for f in &options.files {
-+        if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
++        if let Err(e) = app.open_from_platform(f, None) {
 +            app.report_open_failure(f, &e);
 +        }
 +    }

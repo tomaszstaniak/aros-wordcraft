@@ -1,19 +1,19 @@
 {
   "name": "WordCraft",
-  "version": "0.16.0",
-  "release": "0.16.0",
-  "revision": 1,
-  "upstream_version": "0.16.0 (tag v0.16.0, 2026-11-06)",
+  "version": "0.18.1",
+  "release": "0.18.1",
+  "upstream_version": "0.18.1 (tag v0.18.1, 079f478b)",
   "drawer": "WordCraft",
   "stack": 16777216,
   "tooltypes": [
-    "GUI_RENDERER=CPU"
+    "GUI_RENDERER=AUTO"
   ],
   "icon_source": "work:assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png",
-  "source_archive": "WordCraft-0.16.0-r1-source.zip",
+  "source_archive": "WordCraft-0.18.1-source.zip",
   "source_archive_exclude": [
     "AGENTS.md",
-    "CLAUDE.md"
+    "CLAUDE.md",
+    "project.json"
   ],
   "notices": [
     "LICENSE-MIT",
@@ -27,7 +27,7 @@
   ],
   "targets": {
     "aros-x86_64-abiv11-pc": {
-      "system": "AROS x86_64, ABIv11 (AROS One 1.3)",
+      "system": "AROS x86_64, ABIv11 distributions",
       "sdk": "x86_64 ABIv11 SDK (deadwood2/AROS)",
       "notice": "notices/aros-x86_64-abiv11-pc.txt",
       "build": {
@@ -42,8 +42,8 @@
       ]
     },
     "aros-x86_64-abiv1-pc": {
-      "system": "AROS x86_64, mainline ABIv1 (nightly 2026-11-05)",
-      "sdk": "x86_64 mainline ABIv1 SDK of nightly 2026-11-05",
+      "system": "AROS x86_64, mainline ABIv1 (nightly 2026-11-06 or later)",
+      "sdk": "x86_64 mainline ABIv1 SDK of nightly 2026-11-10",
       "notice": "notices/aros-x86_64-abiv1-pc.txt",
       "build": {
         "lto": null,
@@ -51,6 +51,10 @@
         "features": []
       },
       "limitations": [
+        "- AUTO uses CPU on this system: a program that has opened OpenGL leaves its",
+        "  log file in use after it ends, and the Shell it ran in stops redirecting",
+        "  the output of later programs (seen on nightly 2026-11-10). GPU opens",
+        "  OpenGL all the same.",
         "- OpenGL: with Mesa's software renderer AUTO uses CPU. GPU uses the",
         "  software renderer, which works but is slower than CPU. Hardware OpenGL",
         "  drivers have not been tested.",
@@ -60,8 +64,8 @@
       ]
     },
     "aros-aarch64-abiv1-raspi": {
-      "system": "AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05)",
-      "sdk": "Raspberry Pi AArch64 ABIv1 SDK of nightly 2026-11-05",
+      "system": "AROS on Raspberry Pi, AArch64 ABIv1 (nightly 2026-11-06 or later)",
+      "sdk": "Raspberry Pi AArch64 ABIv1 SDK of nightly 2026-11-10",
       "notice": "notices/aros-aarch64-abiv1-raspi.txt",
       "build": {
         "lto": null,
@@ -77,8 +81,8 @@
     }
   },
   "limitations": [
-    "- Every change redraws the whole window. On slow machines and in emulators",
-    "  the interface follows with a delay.",
+    "- Changes of the whole window (scrolling, zooming, opening a dialog) redraw",
+    "  all of it; on slow machines and in emulators these follow with a delay.",
     "- No printing: export to PDF instead. Files dropped on the window are not",
     "  opened.",
     "- Chinese, Japanese, Korean and emoji characters are kept in documents but",

@@ -4,19 +4,19 @@ An AROS port of [WordCraft](https://github.com/storytold/wordcraft), a word proc
 
 ## Download and run
 
-[Download 0.16.0 (packaging revision 1)](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.16.0-r1) for one of these systems, or install `wordcraft` with arospkg:
+[Download 0.18.1](https://github.com/tomaszstaniak/aros-wordcraft/releases/tag/v0.18.1) for one of these systems, or install `wordcraft` with arospkg:
 
 | Package | System |
 |---|---|
-| `WordCraft-0.16.0-r1-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 (AROS One 1.3) |
-| `WordCraft-0.16.0-r1-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-05) |
-| `WordCraft-0.16.0-r1-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-05) |
+| `WordCraft-0.18.1-aros-x86_64-abiv11-pc.zip` | AROS x86_64, ABIv11 distributions |
+| `WordCraft-0.18.1-aros-x86_64-abiv1-pc.zip` | AROS x86_64, mainline ABIv1 (nightly 2026-11-06 or later) |
+| `WordCraft-0.18.1-aros-aarch64-abiv1-raspi.zip` | AROS on Raspberry Pi, AArch64 ABIv1 (mainline nightly 2026-11-06 or later) |
 
 Each package runs only on the system it was built for and includes WordCraft and `wordcraft-cli`. Unpack the archive anywhere writable and double-click the WordCraft icon; from a Shell, run `WordCraft [file]`. The program takes the stack it needs itself. `ReadMe.txt` in the drawer describes installation, the command line, the clipboard and the interface renderer.
 
 ## Known limitations
 
-The whole window is redrawn on every change, so the interface follows with a delay on slow machines and in emulators. There is no printing (export to PDF instead), no file drops and no copying of pictures out to the clipboard. CJK and emoji characters are shown as boxes. OpenGL was tested only with Mesa's software renderer, and the Raspberry Pi build only in an emulator. The [release notes](docs/releases/v0.16.0.md) list the rest.
+Changes of the whole window (scrolling, zooming) redraw all of it and follow with a delay on slow machines and in emulators. There is no printing (export to PDF instead), no file drops and no copying of pictures out to the clipboard. CJK and emoji characters are shown as boxes. OpenGL was tested only with Mesa's software renderer, and the Raspberry Pi build only in an emulator. The [release notes](docs/releases/v0.18.1.md) list the rest.
 
 ## Build from source
 

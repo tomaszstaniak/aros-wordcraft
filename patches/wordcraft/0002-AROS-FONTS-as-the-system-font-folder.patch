@@ -9,7 +9,7 @@ The font folder list for systems other than macOS and Windows is Linux's; in the
  1 file changed, 4 insertions(+)
 
 diff --git a/crates/fonts/src/fontdb/names.rs b/crates/fonts/src/fontdb/names.rs
-index 0b01041d6699c9be6748de72f6a6490c3052ae71..3567affb568d9adc5fee52577c5d1292f51ba857 100644
+index 4d9458594a08c03f3842f9d6bc84a57092b8724e..2e3bec2a5c9a7aed2c74227b8a406398bed20a78 100644
 --- a/crates/fonts/src/fontdb/names.rs
 +++ b/crates/fonts/src/fontdb/names.rs
 @@ -234,6 +234,10 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {

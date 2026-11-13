@@ -1,5 +1,5 @@
 {
-  "comment": "The app this Craft port builds; scripts/craft.py and craftconfig.py are shared by the Craft ports and read only this file for app-specific names.",
+  "comment": "The app this Craft port builds. scripts/craft.py runs the shared Craft tools pinned in scripts/tooling.json; they read only this file for app-specific names.",
   "id": "wordcraft",
   "name": "WordCraft",
   "env_prefix": "WORDCRAFT",

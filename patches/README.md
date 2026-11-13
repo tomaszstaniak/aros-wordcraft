@@ -4,10 +4,10 @@
 |---|---|---|
 | `wordcraft/` | storytold/wordcraft at the pin in `upstreams.json`; order in `series` | `scripts/craft.py materialize` (`git am`) |
 | `wordcraft-v0.7/` | the previous base, v0.7.0 (series 0001-0018, kept for history; not applied) | nothing |
-| `crates/` | crates.io crates named in `crates/crates.json` (registry checksum and patched-tree hash recorded) | `scripts/craft.py build` |
-| `libc-aros/` | rust-aros `std-groundwork/libc-aros` at the commit in the local file (`rust_aros_commit`); currently no patch | `scripts/craft.py build` |
-| `aros-pthread/` | deadwood2/AROS `compiler/pthread` at the commit in `scripts/craftconfig.py` (ABIv11 target only) | `scripts/craft.py build` |
-| `aros-glue/` | pomaros-hosted `hosted/rust` C bridge at the commit in the local file (Raspberry Pi target only) | `scripts/craft.py build` |
+| `crates/` | crates.io crates named in `crates/crates.json`; the patches, registry checksums and patched-tree hashes are in the shared set of the pinned Craft tools (egui-aros `tools/craft/crates`) | `scripts/craft.py build` |
+| (shared) `libc-aros` | rust-aros `std-groundwork/libc-aros` at the commit in the local file (`rust_aros_commit`); the patch set is in the pinned Craft tools (egui-aros `tools/craft/platform/libc-aros`), currently no patch | `scripts/craft.py build` |
+| `aros-pthread/` | deadwood2/AROS `compiler/pthread` at the commit named for the target in the pinned tools' `craftconfig.py` (ABIv11 target only) | `scripts/craft.py build` |
+| (shared) `aros-glue` | pomaros-hosted `hosted/rust` C bridge at the commit in the local file (Raspberry Pi target only); the patch is in the pinned Craft tools (egui-aros `tools/craft/platform/aros-glue`) | `scripts/craft.py build` |
 
 Every patch carries its problem, rationale, scope, upstream status,
 verification and removal condition in its header (for `wordcraft/`, the commit

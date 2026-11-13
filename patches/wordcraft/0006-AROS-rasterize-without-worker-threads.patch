@@ -9,7 +9,7 @@ AROS's pthread library waits for every thread when a program exits. The render c
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/crates/render/src/lib.rs b/crates/render/src/lib.rs
-index c21f88063e480a57ced965c2b867145cd86c81de..ca84e84cac6f20a86062f00e5049176097d22666 100644
+index 8e57e077131c3edfdf0b5aa18cb3f211cf17f82c..62790e3aae51055c063ea6d8728c057a9426bc8d 100644
 --- a/crates/render/src/lib.rs
 +++ b/crates/render/src/lib.rs
 @@ -26,13 +26,22 @@ use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vec

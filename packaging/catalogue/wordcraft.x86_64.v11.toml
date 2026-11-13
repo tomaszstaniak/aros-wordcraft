@@ -1,6 +1,5 @@
 id              = "wordcraft"
-version         = "0.16.0"
-revision        = 1
+version         = "0.18.1"
 summary         = "Word processor for DOCX, ODT, RTF and more with PDF export"
 category        = "office/text"
 license         = "MIT OR Apache-2.0"
@@ -12,9 +11,9 @@ icon            = "WordCraft.info"
 depends         = []
 depends_checked = true
 post_install_notes = [
-  "AROS One 1.3 and other x86_64 ABIv11 systems.",
-  "The CPU draws the whole window on every change, so the interface reacts with a delay on slow machines.",
-  "GUI_RENDERER ToolType: CPU (default), AUTO or GPU. With Mesa software OpenGL, AUTO uses CPU and GPU is slower.",
+  "x86_64 ABIv11 distributions; tested on AROS One 1.3.",
+  "The CPU renderer redraws only the parts of the window that changed; scrolling, zooming and other changes of the whole window are slower on slow machines.",
+  "GUI_RENDERER ToolType: AUTO (default), CPU or GPU. AUTO uses OpenGL only when it is not Mesa software OpenGL.",
   "Settings, dictionary, fonts and WordCraft.log are kept in WordCraftData in the program drawer; keep it when upgrading.",
   "Clipboard text in the system character set or UTF-8; a picture on the clipboard is pasted with Ctrl+V.",
 ]
@@ -53,8 +52,8 @@ id   = "datatypes.library"
 
 [source]
 repository = "https://github.com/tomaszstaniak/aros-wordcraft"
-revision   = "v0.16.0-r1"
-archive    = "WordCraft-0.16.0-r1-source.zip"
+revision   = "v0.18.1"
+archive    = "WordCraft-0.18.1-source.zip"
 built_with = "x86_64 ABIv11, GCC 10.5.0, Rust nightly 1.100 (rust-aros), egui 0.37 through egui-aros"
 
 [launch]

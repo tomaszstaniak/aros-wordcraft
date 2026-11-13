@@ -1,0 +1,48 @@
+.KEY RUNDIR/A,MACHINE/A
+.BRA [
+.KET ]
+; Upgrade check with apkg from local indexes, everything under RAM:. Payload in RAM:t: apkg,
+; old.zip + idx-old.json (the previous release), wc.zip + idx.json (the new package),
+; steps-pkg.json, steps-pkg2.json, hello.docx. The previous release is installed and used once, then
+; upgraded; the new program is verified, used twice and removed. old.log and WordCraft.log hold
+; the frame costs of the same scripted session before and after.
+; Execute RAM:t/run-upgrade <results directory> <machine name>
+FailAt 21
+Protect RAM:t/apkg +e
+MakeDir RAM:pk
+MakeDir RAM:pk/cache
+Copy RAM:t/old.zip RAM:pk/cache/wordcraft.zip
+RAM:t/apkg --root RAM:pk --machine [MACHINE] --index RAM:t/idx-old.json install wordcraft --yes >[RUNDIR]/old-install.txt
+Echo $RC >[RUNDIR]/old-install.rc
+SetEnv RUST_LOG info
+RAM:pk/WordCraft/WordCraft --window 780x540 --test-steps RAM:t/steps-pkg.json RAM:t/hello.docx
+Echo $RC >[RUNDIR]/old-gui.rc
+Copy RAM:pk/WordCraft/WordCraftData/WordCraft.log [RUNDIR]/old.log
+Delete RAM:pk/WordCraft/WordCraftData/WordCraft.log QUIET
+Echo "user file kept across the upgrade" >RAM:pk/WordCraft/WordCraftData/marker.txt
+List RAM:pk/WordCraft ALL >[RUNDIR]/before-upgrade.txt
+Copy RAM:t/wc.zip RAM:pk/cache/wordcraft.new.zip
+RAM:t/apkg --root RAM:pk --machine [MACHINE] --index RAM:t/idx.json outdated >[RUNDIR]/outdated.txt
+RAM:t/apkg --root RAM:pk --machine [MACHINE] --index RAM:t/idx.json upgrade wordcraft --yes >[RUNDIR]/upgrade.txt
+Echo $RC >[RUNDIR]/upgrade.rc
+RAM:t/apkg --root RAM:pk --machine [MACHINE] --index RAM:t/idx.json verify wordcraft >[RUNDIR]/verify.txt
+Echo $RC >[RUNDIR]/verify.rc
+List RAM:pk/WordCraft ALL >[RUNDIR]/after-upgrade.txt
+Type RAM:pk/WordCraft/WordCraftData/marker.txt >[RUNDIR]/marker.txt
+RAM:pk/WordCraft/wordcraft-cli --version >[RUNDIR]/cli-version.txt
+Echo $RC >[RUNDIR]/cli-version.rc
+RAM:pk/WordCraft/WordCraft --version >[RUNDIR]/gui-version.txt
+RAM:pk/WordCraft/WordCraft --window 780x540 --test-steps RAM:t/steps-pkg.json RAM:t/hello.docx
+Echo $RC >[RUNDIR]/gui.rc
+RAM:pk/WordCraft/wordcraft-cli text RAM:t/pkg-saved.docx >[RUNDIR]/saved-info.txt
+Echo $RC >[RUNDIR]/saved-info.rc
+RAM:pk/WordCraft/WordCraft --window 780x540 --test-steps RAM:t/steps-pkg2.json
+Echo $RC >[RUNDIR]/gui2.rc
+Copy RAM:pk/WordCraft/WordCraftData/WordCraft.log [RUNDIR]/WordCraft.log
+Copy RAM:pk/WordCraft/BUILD.txt [RUNDIR]/BUILD.txt
+Copy RAM:t/pkg-a.png [RUNDIR]/pkg-a.png
+Copy RAM:t/pkg-b.png [RUNDIR]/pkg-b.png
+RAM:t/apkg --root RAM:pk --machine [MACHINE] --index RAM:t/idx.json remove wordcraft --yes >[RUNDIR]/remove.txt
+Echo $RC >[RUNDIR]/remove.rc
+List RAM:pk ALL >[RUNDIR]/after-remove.txt
+Echo "done" >[RUNDIR]/upgrade-done.txt

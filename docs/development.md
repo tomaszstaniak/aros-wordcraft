@@ -1,6 +1,6 @@
 ---
 type: guide
-updated: 2026-11-07
+updated: 2026-11-12
 ---
 
 # Building WordCraft for AROS
@@ -14,9 +14,15 @@ Targets, named as `<system>-<arch>-<abi>-<platform>`:
 | `aros-aarch64-abiv1-raspi` | native AROS on Raspberry Pi, AArch64 |
 
 A binary built for one target does not run on another. Each target has its own toolchain,
-SDK, Cargo home (`deps/<target>/`) and build directory (`build/<target>/`). The scripts in
-`scripts/` (`craft.py`, `craftconfig.py`, `package.py`) are shared by the Craft ports; the app's
-names are in `scripts/port.json`.
+SDK, Cargo home (`deps/<target>/`) and build directory (`build/<target>/`).
+
+The build, packaging and update tools are shared by the Craft ports and live in egui-aros under
+`tools/craft`. `scripts/craft.py` runs the snapshot of them that `scripts/tooling.json` pins (a
+commit and the content hash of that directory), prepared in the ignored `build/tooling/`; it
+takes the commit from the egui-aros checkout named in the local file, or from the URL in
+`tooling.json` when there is none. The app's names are in `scripts/port.json`. That directory's
+README describes the pin, how to change it, and `update-check`, which tries the patch series on a
+newer upstream commit without changing this repository.
 
 ## What you need
 
@@ -37,9 +43,9 @@ names are in `scripts/port.json`.
   - ABIv11: x86_64 AROS GCC 10.5 and the ABIv11 SDK, plus a deadwood2/AROS checkout that
     contains commit `5376f09bc1ed0c36a12fbb096406013f8a046e89` (its `compiler/pthread` is
     rebuilt with `patches/aros-pthread`).
-  - mainline ABIv1: x86_64 AROS GCC 10.5 and the mainline Developer SDK of nightly 2026-11-05.
+  - mainline ABIv1: x86_64 AROS GCC 10.5 and the mainline Developer SDK of nightly 2026-11-10.
   - Raspberry Pi: the AROS-patched Clang 20.1 for `aarch64-unknown-aros` with compiler-rt, the
-    Raspberry Pi Developer SDK of nightly 2026-11-05 (its `libpthread.a` is used unchanged:
+    Raspberry Pi Developer SDK of nightly 2026-11-10 (its `libpthread.a` is used unchanged:
     `"pthread": "sdk"` in the local file), and a pomaros-hosted checkout at
     `3bc9359d439f9fb5655cf48924413ffe670931cc` (the C bridge of the AArch64 standard library,
     built with `patches/aros-glue`).
